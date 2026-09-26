@@ -18,7 +18,7 @@ and never touches your personal `~/.pi/agent`:
 
 | Path | Contents |
 |---|---|
-| `agent/` | Pi agent dir (`PI_CODING_AGENT_DIR`); settings merged from `pi/settings.json` |
+| `agent/` | Pi agent dir (`PI_CODING_AGENT_DIR`); settings merged from `pi/settings.json`; `AGENTS.md` and `APPEND_SYSTEM.md` link to `pi/AGENTS.md` and `WORKING-WITH-GEORGE.md` |
 | `memory/` | The thanx scope: pi-memory data, as its own local git repo (see below) |
 | `tools/` | qmd, pinned |
 | `qmd/` | qmd config and index for the `pi-memory` collection |
@@ -57,6 +57,12 @@ Memory is split in two, and nothing Thanx-specific may enter the personal scope.
 pi-memory's data dir is configurable through `PI_MEMORY_DIR`, which
 `lib/env.sh` sets, so no symlink is needed. Bootstrap refuses to run if that
 dir is inside this repo, and `.gitignore` ignores pi-memory's file names here.
+
+The memory contract, `pi/AGENTS.md`, tells Samwise which layer to consult, how
+to record experience and that wisdom changes only through `/reflect`. It names
+no paths: memory is reached through pi-memory's tools, which run in the Pi host
+process, and both wisdom files are injected. If pi-gondolin (T8) needs memory
+mounted into its VM at `/memory`, only the mount changes, not the contract.
 
 ## Test
 
