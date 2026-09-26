@@ -102,3 +102,9 @@ dir="$(new_golden)"
 write_scenario "$dir" recall base "${BASE/$'  response_includes: ["B"]'/$'  judge: "Mentions B."'}"
 out="$(validate "$dir")" || fail "judge-only scenario rejected: $out"
 assert_contains "$out" "judge-scored 1" "reports judge-scored scenarios"
+
+# --- the real golden set -----------------------------------------------------------
+out="$(validate)" || { echo "$out"; fail "golden set has invalid scenarios"; }
+assert_contains "$out" \
+  "15 valid scenarios: recall 5, preference 3, stale-knowledge 3, scope-leak 4; judge-scored 0; requires reflect 2" \
+  "golden set: 15 valid scenarios in the expected split, none judge-only"
