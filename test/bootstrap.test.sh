@@ -24,6 +24,7 @@ in_samwise() { as_clean bash -c "source '$REPO/lib/env.sh'; $1"; }
 home="$tmp/.pi/samwise"
 settings="$home/agent/settings.json"
 index_yml="$home/qmd/index.yml"
+scope="$home/memory"
 
 # --- first run on a clean account --------------------------------------------
 as_clean "$REPO/bootstrap.sh" >"$tmp/first.log" 2>&1 || { cat "$tmp/first.log"; fail "first bootstrap run failed"; }
@@ -53,13 +54,34 @@ assert_contains "$(cat "$index_yml")" \
   "embed: hf:ggml-org/embeddinggemma-300M-GGUF/embeddinggemma-300M-Q8_0.gguf" \
   "qmd uses its default local embedding model"
 
+# --- thanx scope: local-only git repo with skeleton (D3, D12) -----------------
+[[ -d "$scope/.git" ]] || fail "thanx scope is not a git repo"
+pass "thanx scope is a git repo"
+assert_eq "$(git -C "$scope" remote)" "" "thanx scope has no remote"
+assert_eq "$(git -C "$scope" ls-files | tr '\n' ' ')" \
+  "MEMORY.md SCRATCHPAD.md daily/.gitkeep skills/.gitkeep " "skeleton committed"
+assert_eq "$(git -C "$scope" status --porcelain)" "" "thanx scope working tree is clean"
+assert_contains "$(cat "$settings")" '"../memory/skills"' "thanx-scope skills wired into Pi settings"
+
 # --- re-running is safe -------------------------------------------------------
 settings_sum="$(cksum <"$settings")"
 index_sum="$(cksum <"$index_yml")"
+scope_head="$(git -C "$scope" rev-parse HEAD)"
 as_clean "$REPO/bootstrap.sh" >"$tmp/second.log" 2>&1 || { cat "$tmp/second.log"; fail "second bootstrap run failed"; }
 pass "second bootstrap run succeeds"
 assert_eq "$(cksum <"$settings")" "$settings_sum" "settings.json unchanged by re-run"
 assert_eq "$(cksum <"$index_yml")" "$index_sum" "index.yml unchanged by re-run"
+assert_eq "$(git -C "$scope" rev-parse HEAD)" "$scope_head" "thanx scope HEAD unchanged by re-run"
+
+# --- guard: thanx scope may not live inside the config repo (D5) --------------
+probe="$REPO/.guard-probe-home"
+if out="$(as_clean env SAMWISE_HOME="$probe" "$REPO/bootstrap.sh" 2>&1)"; then
+  rm -rf "$probe"
+  fail "bootstrap accepted a thanx scope inside the config repo"
+fi
+assert_contains "$out" "inside the config repo" "bootstrap refuses a thanx scope inside the config repo"
+[[ ! -e "$probe" ]] || { rm -rf "$probe"; fail "guard ran after creating files in the config repo"; }
+pass "guard fails before creating anything"
 assert_not_contains "$(cat "$tmp/second.log")" "Installing npm:" "re-run skips pi install"
 assert_not_contains "$(cat "$tmp/second.log")" "added " "re-run skips npm install of qmd"
 

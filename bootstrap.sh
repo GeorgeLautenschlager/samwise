@@ -24,8 +24,33 @@ node -e '
   process.exit(maj > wantMaj || (maj === wantMaj && min >= wantMin) ? 0 : 1);
 ' "$MIN_NODE" || die "node >= $MIN_NODE required (found $(node --version))"
 
+step "Checking scope separation"
+if node "$repo/lib/path-inside.mjs" "$PI_MEMORY_DIR" "$repo"; then
+  die "PI_MEMORY_DIR ($PI_MEMORY_DIR) is inside the config repo; the thanx scope must live outside it (D5)"
+fi
+
 step "Creating $SAMWISE_HOME"
 mkdir -p "$PI_CODING_AGENT_DIR" "$PI_MEMORY_DIR" "$SAMWISE_HOME/tools" "$QMD_CONFIG_DIR"
+
+step "Setting up thanx scope"
+# The pi-memory data dir is the thanx scope: its own local-only git repo (D3).
+# No remote until Thanx approves one (D12). Existing memory is never overwritten.
+if [[ ! -d "$PI_MEMORY_DIR/.git" ]]; then
+  git -C "$PI_MEMORY_DIR" init -q -b main
+  mkdir -p "$PI_MEMORY_DIR/daily" "$PI_MEMORY_DIR/skills"
+  touch "$PI_MEMORY_DIR/daily/.gitkeep" "$PI_MEMORY_DIR/skills/.gitkeep"
+  if [[ ! -e "$PI_MEMORY_DIR/MEMORY.md" ]]; then
+    printf '%s\n' "# Thanx memory" "" \
+      "Wisdom from working at Thanx (thanx scope; stays with Thanx). Entries carry an as-of date and change only through /reflect." \
+      >"$PI_MEMORY_DIR/MEMORY.md"
+  fi
+  if [[ ! -e "$PI_MEMORY_DIR/SCRATCHPAD.md" ]]; then
+    printf '# Scratchpad\n\n' >"$PI_MEMORY_DIR/SCRATCHPAD.md"
+  fi
+  git -C "$PI_MEMORY_DIR" add -A
+  git -C "$PI_MEMORY_DIR" -c user.name=Samwise -c user.email=samwise@localhost \
+    commit -q -m "Initialize thanx scope"
+fi
 
 step "Merging Pi settings"
 node "$repo/lib/merge-settings.mjs" "$repo/pi/settings.json" "$PI_CODING_AGENT_DIR/settings.json"
