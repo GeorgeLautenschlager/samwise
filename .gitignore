@@ -216,3 +216,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Samwise: top-level lib/ holds shell and Node helpers, not Python build output.
+!/lib/
