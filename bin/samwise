@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Launch Pi as Samwise, with the environment from lib/env.sh.
+set -euo pipefail
+
+repo="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+# shellcheck source=../lib/env.sh
+source "$repo/lib/env.sh"
+
+exec pi "$@"
