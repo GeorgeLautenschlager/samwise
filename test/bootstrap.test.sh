@@ -63,15 +63,34 @@ assert_eq "$(git -C "$scope" ls-files | tr '\n' ' ')" \
 assert_eq "$(git -C "$scope" status --porcelain)" "" "thanx scope working tree is clean"
 assert_contains "$(cat "$settings")" '"../memory/skills"' "thanx-scope skills wired into Pi settings"
 
+# --- context files: contract and personal wisdom are symlinked in (T3) --------
+assert_eq "$(readlink "$home/agent/AGENTS.md")" "$REPO/pi/AGENTS.md" "AGENTS.md links to the memory contract"
+assert_eq "$(readlink "$home/agent/APPEND_SYSTEM.md")" "$REPO/WORKING-WITH-GEORGE.md" \
+  "APPEND_SYSTEM.md links to WORKING-WITH-GEORGE.md"
+
+# A real file in the way is never overwritten.
+other="$tmp/other-home"
+mkdir -p "$other/agent"
+echo "keep me" >"$other/agent/AGENTS.md"
+if out="$(as_clean env SAMWISE_HOME="$other" "$REPO/bootstrap.sh" 2>&1)"; then
+  fail "bootstrap replaced a regular AGENTS.md"
+fi
+assert_contains "$out" "is not a symlink" "bootstrap refuses to replace a regular AGENTS.md"
+assert_eq "$(cat "$other/agent/AGENTS.md")" "keep me" "the regular AGENTS.md is left intact"
+
 # --- re-running is safe -------------------------------------------------------
 settings_sum="$(cksum <"$settings")"
 index_sum="$(cksum <"$index_yml")"
 scope_head="$(git -C "$scope" rev-parse HEAD)"
+ln -sfn /nonexistent/old-checkout/WORKING-WITH-GEORGE.md "$home/agent/APPEND_SYSTEM.md" # stale link
 as_clean "$REPO/bootstrap.sh" >"$tmp/second.log" 2>&1 || { cat "$tmp/second.log"; fail "second bootstrap run failed"; }
 pass "second bootstrap run succeeds"
 assert_eq "$(cksum <"$settings")" "$settings_sum" "settings.json unchanged by re-run"
 assert_eq "$(cksum <"$index_yml")" "$index_sum" "index.yml unchanged by re-run"
 assert_eq "$(git -C "$scope" rev-parse HEAD)" "$scope_head" "thanx scope HEAD unchanged by re-run"
+assert_eq "$(readlink "$home/agent/APPEND_SYSTEM.md")" "$REPO/WORKING-WITH-GEORGE.md" \
+  "re-run repoints a stale APPEND_SYSTEM.md link"
+assert_eq "$(readlink "$home/agent/AGENTS.md")" "$REPO/pi/AGENTS.md" "re-run keeps the AGENTS.md link"
 
 # --- guard: thanx scope may not live inside the config repo (D5) --------------
 probe="$REPO/.guard-probe-home"
@@ -125,3 +144,5 @@ assert_contains "$(git -C "$scope" status --porcelain)" "daily/$(basename "$note
   "the write shows up as a change in the thanx-scope repo"
 assert_eq "$(git -C "$REPO" status --porcelain)" "$repo_status" "config repo untouched by the write"
 assert_contains "$(cat "$tmp/requests.log")" "probe-skill-zq7" "thanx-scope skills reach Samwise's prompt"
+assert_contains "$(cat "$tmp/requests.log")" "Keystone wins" "memory contract reaches Samwise's prompt"
+assert_contains "$(cat "$tmp/requests.log")" "# Working with George" "personal wisdom reaches Samwise's prompt"

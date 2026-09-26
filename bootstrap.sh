@@ -52,6 +52,23 @@ if [[ ! -d "$PI_MEMORY_DIR/.git" ]]; then
     commit -q -m "Initialize thanx scope"
 fi
 
+step "Linking Samwise context files"
+# link <target> <path>: symlink <path> to <target>. A correct link is kept, a
+# wrong or stale link is repointed (links hold no content), and a real file is
+# never overwritten.
+link() {
+  if [[ -L "$2" ]]; then
+    [[ "$(readlink "$2")" == "$1" ]] && return 0
+    ln -sfn "$1" "$2"
+  elif [[ -e "$2" ]]; then
+    die "$2 is not a symlink; move it aside and re-run (it would be replaced by a link to $1)"
+  else
+    ln -s "$1" "$2"
+  fi
+}
+link "$repo/pi/AGENTS.md" "$PI_CODING_AGENT_DIR/AGENTS.md"
+link "$repo/WORKING-WITH-GEORGE.md" "$PI_CODING_AGENT_DIR/APPEND_SYSTEM.md"
+
 step "Merging Pi settings"
 node "$repo/lib/merge-settings.mjs" "$repo/pi/settings.json" "$PI_CODING_AGENT_DIR/settings.json"
 
