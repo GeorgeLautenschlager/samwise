@@ -1,0 +1,9 @@
+{
+  "name": "samwise-eval",
+  "private": true,
+  "type": "module",
+  "description": "Golden-set eval for Samwise's memory; see README.md.",
+  "dependencies": {
+    "yaml": "2.9.1"
+  }
+}

@@ -219,9 +219,13 @@ __marimo__/
 
 # Samwise: top-level lib/ holds shell and Node helpers, not Python build output.
 !/lib/
+!/eval/lib/
 
 # D5 belt and braces: thanx-scope (pi-memory) content never belongs in this repo.
 MEMORY.md
 SCRATCHPAD.md
 daily/
 recovery/
+
+# Eval-only dependencies (npm ci --prefix eval)
+node_modules/
