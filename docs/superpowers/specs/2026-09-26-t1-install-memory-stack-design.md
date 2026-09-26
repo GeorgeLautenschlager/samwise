@@ -51,8 +51,11 @@ Sourced by both the launcher and bootstrap. Everything derives from
 | `INDEX_PATH` | `$SAMWISE_HOME/qmd/index.sqlite` |
 | `PATH` | `$SAMWISE_HOME/tools/bin` prepended |
 
-Never set: `QMD_EMBED_MODEL`, `QMD_RERANK_MODEL`, `QMD_GENERATE_MODEL`, or a
-`models:` block in qmd's `index.yml` (D2: qmd's default local models only).
+`QMD_EMBED_MODEL`, `QMD_RERANK_MODEL` and `QMD_GENERATE_MODEL` are explicitly
+unset, so a value inherited from the caller's shell cannot override qmd's
+default local models (D2). qmd itself writes its built-in defaults into
+`index.yml` as a `models:` block of `hf:` GGUF URIs; those are downloaded once
+and run locally, so they are expected.
 
 The qmd version pin (`2.8.3`) lives in `bootstrap.sh`; the pi-memory pin lives
 in `pi/settings.json` (D1).
@@ -73,13 +76,16 @@ Bash, `set -euo pipefail`. Each step checks state first so a re-run is a no-op.
    <source>` unless it is already installed at that exact version.
 5. **qmd.** Unless `$SAMWISE_HOME/tools/bin/qmd --version` reports `2.8.3`, run
    `npm install -g --prefix "$SAMWISE_HOME/tools" @tobilu/qmd@2.8.3`.
-6. **Collection.** If `qmd collection list` lacks `pi-memory`, mirror
-   pi-memory's own auto-setup:
-   - `qmd collection add "$PI_MEMORY_DIR" --name pi-memory`
-   - `qmd context add /daily "Daily append-only work logs organized by date" -c pi-memory`
-   - `qmd context add / "Curated long-term memory: decisions, preferences, facts, lessons" -c pi-memory`
+6. **Collection.** If `qmd collection list` lacks `pi-memory` (re-adding
+   exits 1), run `qmd collection add "$PI_MEMORY_DIR" --name pi-memory`. Then
+   always set the two contexts pi-memory intends (idempotent map writes):
+   - `qmd context add qmd://pi-memory/daily "Daily append-only work logs organized by date"`
+   - `qmd context add qmd://pi-memory "Curated long-term memory: decisions, preferences, facts, lessons"`
 
-   Then always run `qmd update` and `qmd embed` (both incremental). The first
+   pi-memory's own auto-setup passes `/daily` and `/`, which in qmd 2.8.3 fail
+   and set a *global* context respectively (errors ignored), so bootstrap uses
+   `qmd://` paths instead. Then always run `qmd update` and `qmd embed` (both
+   incremental). The first
    embed downloads the default local embedding model.
 7. Print a short summary (paths, versions, how to launch).
 
@@ -97,8 +103,10 @@ the embedding model is not re-downloaded. It asserts every "Done when" item:
 2. After seeding a memory file and running `qmd update`, `qmd search` for a
    term in it returns a hit.
 3. Grepping the repo config and `$SAMWISE_HOME` config (`agent/settings.json`,
-   `qmd/*.yml`, `lib/env.sh`) finds no embedding model overrides, embedding
-   URLs, or API keys.
+   `qmd/index.yml`, `lib/env.sh`, `pi/settings.json`) finds no `http(s)://`
+   URLs, API keys, or `QMD_*_MODEL=` assignments, and every `models:` entry in
+   `index.yml` is an `hf:` URI with `embed` equal to qmd's default
+   (`embeddinggemma-300M`).
 4. A second bootstrap run exits 0 and leaves `settings.json` and qmd's
    `index.yml` byte-identical.
 
