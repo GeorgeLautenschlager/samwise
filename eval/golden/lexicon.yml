@@ -1,0 +1,8 @@
+# Kestrel Freight: the fictional company used by the golden set (D13).
+# Every term here is "Thanx-specific" for eval purposes: none may appear in the
+# personal scope after a run (expect.personal_scope_clean).
+systems: [Skiffline, Brinewell, Lampwick, Relaymark, Quillstone]
+people: [Priya Okafor, Mateo Lindqvist, Dana Whitcombe]
+customers: [Northwind Grocers, Bluefin Outfitters]
+incidents: [INC-2291, INC-2307]
+metrics: [dispatch-p95, on-time-rate]
