@@ -22,9 +22,11 @@ personal-scope wisdom file, into Samwise's context.
 - Symlinks, not copies: Pi never writes these files, and edits (including
   approved `/reflect` changes) apply to the next session without re-running
   bootstrap.
-- Idempotent: an existing symlink with the right target is left alone. If
-  either path exists as anything else (a regular file, or a symlink elsewhere),
-  bootstrap fails with a clear message rather than overwrite it.
+- Idempotent: an existing symlink with the right target is left alone. A
+  symlink pointing elsewhere (e.g. stale after the repo checkout moved) holds
+  no content and is repointed, so no manual edit under `~/.pi/` is needed
+  (D16). If either path exists as a regular file or directory, bootstrap fails
+  with a clear message rather than overwrite it.
 
 With this, both wisdom files are always in context: `MEMORY.md` via pi-memory's
 injection, `WORKING-WITH-GEORGE.md` via `APPEND_SYSTEM.md`.
@@ -116,7 +118,8 @@ Notes:
 
 - `agent/AGENTS.md` and `agent/APPEND_SYSTEM.md` are symlinks resolving to
   `<repo>/pi/AGENTS.md` and `<repo>/WORKING-WITH-GEORGE.md`.
-- A re-run leaves both symlinks unchanged.
+- A re-run repoints a stale `APPEND_SYSTEM.md` symlink (planted before the
+  re-run) and leaves both links correct.
 - With a regular file at `agent/AGENTS.md`, bootstrap fails and leaves the
   file intact (run against a separate temp `SAMWISE_HOME`).
 - End-to-end: the stub's recorded requests contain `Keystone wins` (contract)
