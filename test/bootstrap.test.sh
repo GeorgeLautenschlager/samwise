@@ -91,3 +91,37 @@ echo "#lesson [[zebra-cache]] Flushing the zebracache fixed the stale widget bug
   >"$home/memory/daily/2026-01-01.md"
 out="$(in_samwise 'qmd update >/dev/null && qmd search zebracache -c pi-memory')"
 assert_contains "$out" "qmd://pi-memory/daily/2026-01-01.md" "search over a seeded file returns a hit"
+
+# --- end-to-end: a real pi-memory write lands in the thanx scope --------------
+mkdir -p "$scope/skills/probe"
+printf -- '---\nname: probe-skill-zq7\ndescription: Probe skill for the Samwise bootstrap test.\n---\n\nProbe.\n' \
+  >"$scope/skills/probe/SKILL.md"
+repo_status="$(git -C "$REPO" status --porcelain)"
+
+node "$REPO/test/fixtures/stub-llm.mjs" "#lesson e2e-probe-note" "$tmp/requests.log" >"$tmp/port" &
+stub_pid=$!
+trap 'kill "$stub_pid" 2>/dev/null; rm -rf "$tmp"' EXIT
+for _ in $(seq 50); do [[ -s "$tmp/port" ]] && break; sleep 0.1; done
+[[ -s "$tmp/port" ]] || fail "stub LLM did not start"
+
+cat >"$home/agent/models.json" <<EOF
+{ "providers": { "stub": {
+  "baseUrl": "http://127.0.0.1:$(cat "$tmp/port")/v1",
+  "api": "openai-completions",
+  "apiKey": "stub",
+  "models": [{ "id": "stub-model" }]
+} } }
+EOF
+
+(cd "$tmp" && as_clean PI_OFFLINE=1 PI_MEMORY_EXIT_SUMMARY=0 \
+  timeout 60 "$REPO/bin/samwise" -p --model stub/stub-model "remember this" </dev/null) \
+  >"$tmp/pi.log" 2>&1 || { cat "$tmp/pi.log"; fail "Samwise session against the stub failed"; }
+pass "Samwise session runs against the stub LLM"
+
+note_file="$(grep -l "e2e-probe-note" "$scope"/daily/*.md || true)"
+[[ -n "$note_file" ]] || fail "memory_write did not land in the thanx scope's daily log"
+pass "memory_write landed in the thanx scope's daily log"
+assert_contains "$(git -C "$scope" status --porcelain)" "daily/$(basename "$note_file")" \
+  "the write shows up as a change in the thanx-scope repo"
+assert_eq "$(git -C "$REPO" status --porcelain)" "$repo_status" "config repo untouched by the write"
+assert_contains "$(cat "$tmp/requests.log")" "probe-skill-zq7" "thanx-scope skills reach Samwise's prompt"
