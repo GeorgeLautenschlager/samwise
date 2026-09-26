@@ -168,3 +168,20 @@ any error.
   temp dir is rejected with an error naming the problem.
 
 The "no real Wave/Thanx names" review is a manual pass, reported on the issue.
+
+## Refinements made while planning
+
+1. Rule 9: a scope-leak scenario needs a lexicon term in its prompt **or
+   seed** (the `/reflect` scenarios' prompt is just `/reflect`).
+2. `tool_not_called` items may be a bare name or `{name, args_include}`.
+3. `args_include`: a string value matches when the call's argument contains it
+   (case-sensitive substring); other values must be equal.
+4. Mock Keystone returns a doc when every `match` keyword appears in the query
+   as a case-insensitive substring.
+5. `seed.personal` must not contain any lexicon term.
+6. Recall expectations include the earlier fix's pointer (a PR number) as well
+   as the resolution keyword, so a pass shows recall from memory (AC2).
+7. The `pnpm-not-npm` scenario checks only for a `pnpm add` call: an
+   "`npm install` must not appear" check would also match `pnpm install`.
+8. `no-orm-hot-path` expects `SELECT` and excludes `findAll(` rather than
+   "SQL" / "ORM model", which an answer could mention in passing.
