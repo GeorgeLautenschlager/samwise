@@ -67,6 +67,8 @@ assert_contains "$(cat "$settings")" '"../memory/skills"' "thanx-scope skills wi
 assert_eq "$(readlink "$home/agent/AGENTS.md")" "$REPO/pi/AGENTS.md" "AGENTS.md links to the memory contract"
 assert_eq "$(readlink "$home/agent/APPEND_SYSTEM.md")" "$REPO/WORKING-WITH-GEORGE.md" \
   "APPEND_SYSTEM.md links to WORKING-WITH-GEORGE.md"
+assert_eq "$(readlink "$home/agent/prompts")" "$REPO/pi/prompts" "prompt templates (/reflect) linked in"
+assert_eq "$(readlink "$home/agent/extensions")" "$REPO/pi/extensions" "extensions (reflect nudge) linked in"
 
 # A real file in the way is never overwritten.
 other="$tmp/other-home"

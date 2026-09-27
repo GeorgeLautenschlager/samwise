@@ -22,3 +22,13 @@ assert_eq "$out" "$tmp/home/agent|per-turn|--model x hello world" "launcher expo
 ln -s "$REPO/bin/samwise" "$tmp/links/samwise"
 out="$(SAMWISE_HOME="$tmp/home" PATH="$tmp/stub:$PATH" "$tmp/links/samwise")"
 assert_eq "$out" "$tmp/home/agent|per-turn|" "launcher works through a symlink"
+
+# The launcher puts the repo's bin/ on PATH, so Samwise can run samwise-reflect.
+mkdir -p "$tmp/stub2"
+cat >"$tmp/stub2/pi" <<'EOF'
+#!/usr/bin/env bash
+command -v samwise-reflect
+EOF
+chmod +x "$tmp/stub2/pi"
+out="$(SAMWISE_HOME="$tmp/home" PATH="$tmp/stub2:$PATH" "$REPO/bin/samwise")"
+assert_eq "$out" "$REPO/bin/samwise-reflect" "launcher puts samwise-reflect on PATH"
