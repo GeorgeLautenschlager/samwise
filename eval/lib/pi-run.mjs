@@ -1,6 +1,7 @@
 // Run one Samwise session non-interactively (pi --mode json) and parse its
 // JSONL event stream into the final answer and the tool calls made.
 import { spawn } from "node:child_process";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { samwiseEnv } from "./sandbox.mjs";
 
@@ -43,11 +44,21 @@ export function runPi({ repo, run, model, prompts, network, timeoutMs }) {
 	}
 	const args = ["--mode", "json", "--model", model, "-e", join(repo, "eval/keystone-mock.ts"), ...prompts];
 	return new Promise((resolve) => {
+		// Own process group, so the whole session (e.g. qmd searches pi-memory
+		// gave up on) can be killed when it ends.
 		const child = spawn(join(repo, "bin/samwise"), args, {
 			cwd: run.workspace,
 			env: samwiseEnv(run.home, extra),
 			stdio: ["ignore", "pipe", "pipe"],
+			detached: true,
 		});
+		const killGroup = () => {
+			try {
+				process.kill(-child.pid, "SIGKILL");
+			} catch {
+				// group already gone
+			}
+		};
 		let stdout = "";
 		let stderr = "";
 		let timedOut = false;
@@ -59,11 +70,38 @@ export function runPi({ repo, run, model, prompts, network, timeoutMs }) {
 		});
 		const timer = setTimeout(() => {
 			timedOut = true;
-			child.kill("SIGKILL");
+			killGroup();
 		}, timeoutMs);
 		child.on("close", (code) => {
 			clearTimeout(timer);
+			killGroup();
 			resolve({ code, stdout, stderr, timedOut });
 		});
 	});
+}
+
+// Kill every process still running from a run: all of them inherit the run's
+// SAMWISE_HOME, even those that left the process group (e.g. via setsid).
+// Linux only (/proc); elsewhere the process-group kill in runPi is the cleanup.
+export function reapRun(home) {
+	let pids;
+	try {
+		pids = readdirSync("/proc").filter((d) => /^\d+$/.test(d) && Number(d) !== process.pid);
+	} catch {
+		return 0;
+	}
+	const marker = `SAMWISE_HOME=${home}\0`;
+	let killed = 0;
+	for (const pid of pids) {
+		try {
+			const env = readFileSync(`/proc/${pid}/environ`, "latin1");
+			if (env.startsWith(marker) || env.includes(`\0${marker}`)) {
+				process.kill(Number(pid), "SIGKILL");
+				killed++;
+			}
+		} catch {
+			// exited, or not ours to read
+		}
+	}
+	return killed;
 }

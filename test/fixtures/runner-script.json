@@ -111,6 +111,22 @@
           "text": "Applied."
         }
       ]
+    },
+    {
+      "when": "RUNNER-ORPHAN",
+      "steps": [
+        {
+          "tool": {
+            "name": "bash",
+            "args": {
+              "command": "setsid sleep 987 >/dev/null 2>&1 < /dev/null & echo launched"
+            }
+          }
+        },
+        {
+          "text": "started"
+        }
+      ]
     }
   ]
 }

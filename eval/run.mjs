@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { CONFIGS } from "./lib/configs.mjs";
 import { scoreRun } from "./lib/expect.mjs";
-import { parseTranscript, runPi } from "./lib/pi-run.mjs";
+import { parseTranscript, reapRun, runPi } from "./lib/pi-run.mjs";
 import { renderMarkdown, summarize } from "./lib/report.mjs";
 import { createRun, exec, inSamwise, personalFiles, prepareBase } from "./lib/sandbox.mjs";
 import { loadLexicon, loadScenario, validateScenario } from "./lib/scenario.mjs";
@@ -163,6 +163,7 @@ async function runTask({ scenario, n }) {
 	} catch (e) {
 		return failed(String(e.message).split("\n")[0]);
 	} finally {
+		reapRun(join(dir, "home"));
 		if (opts.keep) await rm(join(dir, "home/agent/auth.json"), { force: true });
 		else await rm(dir, { recursive: true, force: true });
 	}

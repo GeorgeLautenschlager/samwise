@@ -92,6 +92,13 @@ assert_contains "$(git -C "$run_dir/home/memory" log -1 --format=%B)" "Reflect-R
 rm -rf "$kept"
 
 
+# --- stranded processes are reaped ------------------------------------------------
+pkill -f '^sleep 987$' 2>/dev/null || true
+eval_run "$tmp/orphan" --config A --runs 1 --only runner-orphan >/dev/null 2>&1 || true
+assert_contains "$(cat "$(ls -d "$tmp/orphan"/*/)"/runner-orphan-1.jsonl)" "launched" "the stub left a detached process running"
+if pgrep -f '^sleep 987$' >/dev/null; then pkill -f '^sleep 987$'; fail "a process started in the run outlived it"; fi
+pass "processes started in a run do not outlive it"
+
 # --- isolation -------------------------------------------------------------------
 assert_eq "$(cksum <"$REPO/WORKING-WITH-GEORGE.md")" "$wisdom_sum" "real WORKING-WITH-GEORGE.md untouched"
 assert_eq "$(git -C "$REPO" status --porcelain)" "$repo_status" "config repo untouched"
