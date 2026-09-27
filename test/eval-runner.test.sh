@@ -55,7 +55,7 @@ assert_eq "$(jq_node "$tmp/a" '[r.ac.AC2.status, r.ac.AC3.status, r.ac.AC4.statu
 assert_eq "$(jq_node "$tmp/a" 'r.leaks.map((l) => l.term + "@" + l.path)')" \
   '["Skiffline@personal/WORKING-WITH-GEORGE.md","Skiffline@personal/WORKING-WITH-GEORGE.md"]' \
   "the planted leak is detected in the run's personal-scope copy"
-assert_eq "$(jq_node "$tmp/a" 'r.skipped.map((s) => s.id)')" '["runner-requires"]' "scenarios needing reflect are skipped"
+assert_eq "$(jq_node "$tmp/a" 'r.skipped.map((s) => s.id)')" '["runner-requires"]' "scenarios needing unavailable capabilities are skipped"
 assert_contains "$(jq_node "$tmp/a" 'r.network.map((d) => d.destination)')" "127.0.0.1:$port" "network capture logs the model endpoint"
 assert_contains "$(cat "$tmp/a"/*.md)" "**Verdict: FAIL**" "markdown report written"
 
@@ -76,6 +76,21 @@ eval_run "$tmp/search-b" --config B --runs 1 --only runner-search >/dev/null 2>&
 b_transcript="$(cat "$(ls -d "$tmp/search-b"/*/)"/runner-search-1.jsonl)"
 assert_not_contains "$b_transcript" "2026-08-01.md" "config B: memory_search finds nothing"
 assert_contains "$b_transcript" "@tobilu/qmd" "config B: pi-memory reports qmd unavailable"
+
+# --- /reflect through a Samwise session -------------------------------------------
+eval_run "$tmp/reflect" --config A --runs 1 --only runner-reflect --keep >"$tmp/reflect.log" 2>&1 || true
+assert_eq "$(jq_node "$tmp/reflect" 'r.scenarios.map((s) => `${s.id}:${s.passed}/${s.runs}`).join(" ")')" \
+  '"runner-reflect:1/1"' "/reflect scenario passes (personal scope clean, apply ran)"
+reflect_transcript="$(cat "$(ls -d "$tmp/reflect"/*/)"/runner-reflect-1.jsonl)"
+assert_contains "$reflect_transcript" "Wisdom entries" "/reflect template expanded and context ran"
+assert_contains "$reflect_transcript" "rerouted from personal" "the helper rerouted the leaky personal item"
+kept="$(sed -n 's/^eval: kept run dirs in //p' "$tmp/reflect.log")"
+run_dir="$kept/runs/runner-reflect-1"
+assert_contains "$(cat "$run_dir/home/memory/MEMORY.md")" "Skiffline carrier calls need a circuit breaker." "leaky lesson landed in the thanx scope"
+assert_contains "$(cat "$run_dir/personal/WORKING-WITH-GEORGE.md")" "### Breakers" "general lesson landed in the personal copy"
+assert_contains "$(git -C "$run_dir/home/memory" log -1 --format=%B)" "Reflect-Run: " "thanx-scope commit is an approved /reflect commit"
+rm -rf "$kept"
+
 
 # --- isolation -------------------------------------------------------------------
 assert_eq "$(cksum <"$REPO/WORKING-WITH-GEORGE.md")" "$wisdom_sum" "real WORKING-WITH-GEORGE.md untouched"

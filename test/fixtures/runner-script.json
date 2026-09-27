@@ -3,16 +3,41 @@
     {
       "when": "RUNNER-PASS",
       "steps": [
-        { "tool": { "name": "bash", "args": { "command": "cat \"$PI_MEMORY_DIR/daily/2026-08-01.md\"" } } },
-        { "text": "Raise the prefetch, like PR #42." }
+        {
+          "tool": {
+            "name": "bash",
+            "args": {
+              "command": "cat \"$PI_MEMORY_DIR/daily/2026-08-01.md\""
+            }
+          }
+        },
+        {
+          "text": "Raise the prefetch, like PR #42."
+        }
       ]
     },
-    { "when": "RUNNER-FAIL", "steps": [{ "text": "No idea, sorry." }] },
+    {
+      "when": "RUNNER-FAIL",
+      "steps": [
+        {
+          "text": "No idea, sorry."
+        }
+      ]
+    },
     {
       "when": "RUNNER-KEYSTONE",
       "steps": [
-        { "tool": { "name": "keystone_search", "args": { "query": "skiffline deploy" } } },
-        { "text": "Deploy with Argo CD." }
+        {
+          "tool": {
+            "name": "keystone_search",
+            "args": {
+              "query": "skiffline deploy"
+            }
+          }
+        },
+        {
+          "text": "Deploy with Argo CD."
+        }
       ]
     },
     {
@@ -21,17 +46,70 @@
         {
           "tool": {
             "name": "bash",
-            "args": { "command": "echo 'Restart Skiffline first.' >> \"$(readlink \"$PI_CODING_AGENT_DIR/APPEND_SYSTEM.md\")\"" }
+            "args": {
+              "command": "echo 'Restart Skiffline first.' >> \"$(readlink \"$PI_CODING_AGENT_DIR/APPEND_SYSTEM.md\")\""
+            }
           }
         },
-        { "text": "Saved." }
+        {
+          "text": "Saved."
+        }
       ]
     },
     {
       "when": "RUNNER-SEARCH",
       "steps": [
-        { "tool": { "name": "memory_search", "args": { "query": "zebra" } } },
-        { "text": "Raise the prefetch, like PR #42." }
+        {
+          "tool": {
+            "name": "memory_search",
+            "args": {
+              "query": "zebra"
+            }
+          }
+        },
+        {
+          "text": "Raise the prefetch, like PR #42."
+        }
+      ]
+    },
+    {
+      "when": "samwise-reflect context",
+      "steps": [
+        {
+          "tool": {
+            "name": "bash",
+            "args": {
+              "command": "samwise-reflect context"
+            }
+          }
+        },
+        {
+          "tool": {
+            "name": "bash",
+            "args": {
+              "command": "samwise-reflect propose <<'JSON'\n{\"items\": [{\"op\": \"add\", \"scope\": \"personal\", \"title\": \"Carrier calls\", \"body\": \"Skiffline carrier calls need a circuit breaker.\"}, {\"op\": \"add\", \"scope\": \"personal\", \"title\": \"Breakers\", \"body\": \"Prefer circuit breakers to longer timeouts.\"}], \"vocabulary\": [\"Skiffline\"]}\nJSON"
+            }
+          }
+        },
+        {
+          "text": "Here is the proposal. Approve all, some or none?"
+        }
+      ]
+    },
+    {
+      "when": "Approve everything",
+      "steps": [
+        {
+          "tool": {
+            "name": "bash",
+            "args": {
+              "command": "samwise-reflect apply"
+            }
+          }
+        },
+        {
+          "text": "Applied."
+        }
       ]
     }
   ]

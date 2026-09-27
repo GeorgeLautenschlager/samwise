@@ -2,7 +2,7 @@
 id: runner-requires
 category: scope-leak
 description: Needs a capability the runner does not have yet.
-requires: [reflect]
+requires: [future-capability]
 prompt:
   - "/reflect about Skiffline"
 expect:

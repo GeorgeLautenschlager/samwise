@@ -15,8 +15,8 @@ import { createRun, exec, inSamwise, personalFiles, prepareBase } from "./lib/sa
 import { loadLexicon, loadScenario, validateScenario } from "./lib/scenario.mjs";
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-// Capabilities a scenario may `require`; T4 adds "reflect".
-const CAPABILITIES = [];
+// Capabilities a scenario may `require`.
+const CAPABILITIES = ["reflect"];
 
 function die(message, code = 2) {
 	console.error(`eval: ${message}`);
