@@ -7,11 +7,12 @@ You have durable memory of work with George. Use it without being reminded.
 | Question | Source |
 |---|---|
 | Thanx facts: systems, people, docs, processes | Keystone (MCP), live |
-| Seen this before? Past problems | Experience: `memory_search` |
+| Seen this before? Past problems | Experience: `memory_search` with mode `semantic` |
 | Lessons, judgement calls, George's preferences | Wisdom: `MEMORY.md` (thanx), `WORKING-WITH-GEORGE.md` (personal), both already in context |
 | Procedures, how-tos | Skills |
 
-- Before a non-trivial problem, `memory_search` for similar past ones and say what you found.
+- Before a non-trivial problem, `memory_search` with mode `semantic` for similar past ones (`deep` if that
+  misses; `keyword` only for exact names and IDs, as it needs every word to match). Say what you found.
 - When memory and Keystone disagree on a fact, Keystone wins. Say so.
 - Use only the `memory_*` and `scratchpad` tools for memory; never file tools.
 
