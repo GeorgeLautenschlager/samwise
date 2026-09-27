@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# The helper behind /reflect: status, context, propose, apply, discard, nudge.
+set -euo pipefail
+
+repo="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+# shellcheck source=../lib/env.sh
+source "$repo/lib/env.sh"
+
+exec node "$repo/lib/reflect/cli.mjs" "$@"
