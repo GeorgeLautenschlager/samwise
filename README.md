@@ -64,6 +64,29 @@ no paths: memory is reached through pi-memory's tools, which run in the Pi host
 process, and both wisdom files are injected. If pi-gondolin (T8) needs memory
 mounted into its VM at `/memory`, only the mount changes, not the contract.
 
+## /reflect
+
+Wisdom files (`MEMORY.md` in the thanx scope, `WORKING-WITH-GEORGE.md` here)
+change only through `/reflect`, with George's approval (D8):
+
+1. `/reflect` (a Pi prompt template, `pi/prompts/reflect.md`) has Samwise run
+   `samwise-reflect context`, then propose additions, edits and retirements as
+   JSON to `samwise-reflect propose`.
+2. The helper stamps `as-of` dates, reroutes any personal-bound item that
+   contains Thanx vocabulary, IDs, PR refs, Keystone pointers or URLs to the
+   thanx scope, and prints **one** numbered diff. Nothing is written yet.
+3. George approves all, some ("all but 2") or none; Samwise runs
+   `samwise-reflect apply [--skip/--only]` or `discard`.
+4. `apply` writes both files and commits in each scope's repo with a
+   `reflect: approved run <date>` message and `Reflect-Run`,
+   `Reflected-Through` and `Approved-Items` trailers. Only
+   `WORKING-WITH-GEORGE.md` is committed here, so other staged work is left
+   alone. New Thanx names go into the thanx scope's `VOCABULARY.md`.
+
+A session-start nudge (`pi/extensions/reflect-nudge.ts`) reminds George at
+most once a day when logs are unreflected or a proposal is waiting.
+`bin/samwise-reflect status` shows the same from a shell.
+
 ## Test
 
 ```bash
