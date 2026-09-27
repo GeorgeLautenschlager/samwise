@@ -10,7 +10,7 @@ contract="$REPO/pi/AGENTS.md"
 c="$(cat "$contract")"
 
 # 1. Layer routing and precedence
-for phrase in "Keystone (MCP)" "memory_search" 'mode `semantic`' "memory_read" "WORKING-WITH-GEORGE.md" "Skills" "Keystone wins"; do
+for phrase in "Keystone (MCP)" "memory_search" 'mode `semantic`' "memory_read" "WORKING-WITH-GEORGE.md" "Skills" "Keystone first" "Keystone wins"; do
   assert_contains "$c" "$phrase" "routing: $phrase"
 done
 

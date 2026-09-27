@@ -14,7 +14,8 @@ You have durable memory of work with George. Use it without being reminded.
 - Before a non-trivial problem, `memory_search` with mode `semantic` for similar past ones (`deep` if that
   misses; `keyword` only for exact names and IDs, as it needs every word to match). Results are
   truncated: on a hit, `memory_read` that day's log (target `daily`) and cite what worked and its pointers.
-- When memory and Keystone disagree on a fact, Keystone wins. Say so.
+- For Thanx facts (how a system works or is deployed, who owns what, processes), ask Keystone first,
+  even when memory has an answer: memory may be stale. When they disagree, Keystone wins. Say so.
 - Use only the `memory_*` and `scratchpad` tools for memory; never file tools.
 
 ## Keystone pointers
