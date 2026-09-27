@@ -1,0 +1,38 @@
+{
+  "rules": [
+    {
+      "when": "RUNNER-PASS",
+      "steps": [
+        { "tool": { "name": "bash", "args": { "command": "cat \"$PI_MEMORY_DIR/daily/2026-08-01.md\"" } } },
+        { "text": "Raise the prefetch, like PR #42." }
+      ]
+    },
+    { "when": "RUNNER-FAIL", "steps": [{ "text": "No idea, sorry." }] },
+    {
+      "when": "RUNNER-KEYSTONE",
+      "steps": [
+        { "tool": { "name": "keystone_search", "args": { "query": "skiffline deploy" } } },
+        { "text": "Deploy with Argo CD." }
+      ]
+    },
+    {
+      "when": "RUNNER-LEAK",
+      "steps": [
+        {
+          "tool": {
+            "name": "bash",
+            "args": { "command": "echo 'Restart Skiffline first.' >> \"$(readlink \"$PI_CODING_AGENT_DIR/APPEND_SYSTEM.md\")\"" }
+          }
+        },
+        { "text": "Saved." }
+      ]
+    },
+    {
+      "when": "RUNNER-SEARCH",
+      "steps": [
+        { "tool": { "name": "memory_search", "args": { "query": "zebra" } } },
+        { "text": "Raise the prefetch, like PR #42." }
+      ]
+    }
+  ]
+}

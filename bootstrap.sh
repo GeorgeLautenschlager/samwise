@@ -67,7 +67,8 @@ link() {
   fi
 }
 link "$repo/pi/AGENTS.md" "$PI_CODING_AGENT_DIR/AGENTS.md"
-link "$repo/WORKING-WITH-GEORGE.md" "$PI_CODING_AGENT_DIR/APPEND_SYSTEM.md"
+# The eval runner points this at a per-run copy so runs never touch the real file.
+link "${SAMWISE_PERSONAL_WISDOM:-$repo/WORKING-WITH-GEORGE.md}" "$PI_CODING_AGENT_DIR/APPEND_SYSTEM.md"
 
 step "Merging Pi settings"
 node "$repo/lib/merge-settings.mjs" "$repo/pi/settings.json" "$PI_CODING_AGENT_DIR/settings.json"

@@ -229,3 +229,6 @@ recovery/
 
 # Eval-only dependencies (npm ci --prefix eval)
 node_modules/
+
+# Eval transcripts (next to each report; reports themselves are committed)
+eval/reports/*/
