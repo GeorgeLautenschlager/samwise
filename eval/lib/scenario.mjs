@@ -103,6 +103,8 @@ function expectErrors(expect) {
 		switch (key) {
 			case "response_includes":
 			case "response_excludes":
+			case "artifact_includes":
+			case "artifact_excludes":
 				if (!isStringList(value)) errors.push(`expect.${key} must be a non-empty list of strings`);
 				break;
 			case "tool_called":

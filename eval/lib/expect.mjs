@@ -15,6 +15,14 @@ function callMatches(item, call) {
 	return call.name === want.name && argsMatch(want.args_include, call.args);
 }
 
+// What the run produced: the final answer plus everything written with the
+// write/edit tools (code often lands in a file rather than in the reply).
+const WRITE_TOOLS = new Set(["write", "edit"]);
+function artifactText(finalText, toolCalls) {
+	const written = toolCalls.filter((c) => WRITE_TOOLS.has(c.name)).map((c) => JSON.stringify(c.args));
+	return [finalText, ...written].join("\n").toLowerCase();
+}
+
 const describe = (item) => (typeof item === "string" ? item : JSON.stringify(item));
 
 // Every lexicon term (case-insensitive) in every personal-scope file: [{path, term}].
@@ -31,6 +39,7 @@ export function findLeaks(personalFiles, lexicon) {
 // makes them fail the run.
 export function scoreRun(expect, { finalText, toolCalls, personalFiles }, lexicon) {
 	const text = finalText.toLowerCase();
+	const artifact = artifactText(finalText, toolCalls);
 	const leaks = findLeaks(personalFiles, lexicon);
 	const checks = Object.entries(expect).map(([key, value]) => {
 		switch (key) {
@@ -40,6 +49,14 @@ export function scoreRun(expect, { finalText, toolCalls, personalFiles }, lexico
 			}
 			case "response_excludes": {
 				const found = value.filter((s) => text.includes(s.toLowerCase()));
+				return { key, pass: found.length === 0, detail: found.length ? `found: ${found.join(", ")}` : "" };
+			}
+			case "artifact_includes": {
+				const missing = value.filter((s) => !artifact.includes(s.toLowerCase()));
+				return { key, pass: missing.length === 0, detail: missing.length ? `missing: ${missing.join(", ")}` : "" };
+			}
+			case "artifact_excludes": {
+				const found = value.filter((s) => artifact.includes(s.toLowerCase()));
 				return { key, pass: found.length === 0, detail: found.length ? `found: ${found.join(", ")}` : "" };
 			}
 			case "tool_called": {

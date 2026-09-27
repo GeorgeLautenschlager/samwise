@@ -69,3 +69,21 @@ test("judge is not machine-scored, so it fails explicitly", () => {
 	assert.equal(r.pass, false);
 	assert.equal(r.checks[0].detail, "judge is not machine-scored");
 });
+
+test("artifact_includes checks the final text and anything written with write/edit", () => {
+	const written = [{ name: "write", args: { path: "dispatches.js", content: "const q = `SELECT id FROM dispatches`;" } }];
+	assert.equal(check({ artifact_includes: ["select"] }, { finalText: "Implemented it in dispatches.js.", toolCalls: written }).pass, true);
+	const edited = [{ name: "edit", args: { path: "a.js", edits: [{ oldText: "x", newText: "SELECT 1" }] } }];
+	assert.equal(check({ artifact_includes: ["SELECT"] }, { toolCalls: edited }).pass, true);
+	assert.equal(check({ artifact_includes: ["SELECT"] }, { finalText: "SELECT * FROM t" }).pass, true);
+	const r = check({ artifact_includes: ["SELECT"] }, { finalText: "done", toolCalls: [{ name: "bash", args: { command: "echo SELECT" } }] });
+	assert.equal(r.pass, false);
+	assert.equal(r.checks[0].detail, "missing: SELECT");
+});
+
+test("artifact_excludes fails when written content contains a string", () => {
+	const written = [{ name: "write", args: { path: "d.js", content: "Dispatch.findAll({})" } }];
+	const r = check({ artifact_excludes: ["findAll("] }, { finalText: "ok", toolCalls: written });
+	assert.equal(r.pass, false);
+	assert.equal(r.checks[0].detail, "found: findAll(");
+});

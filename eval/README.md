@@ -50,6 +50,8 @@ All are checked without an LLM except `judge`.
 |---|---|
 | `response_includes: [s]` | The final assistant message contains every string (case-insensitive) |
 | `response_excludes: [s]` | The final assistant message contains none of them (case-insensitive) |
+| `artifact_includes: [s]` | The final message or anything written with the `write`/`edit` tools contains every string (case-insensitive) |
+| `artifact_excludes: [s]` | Neither the final message nor anything written contains any of them (case-insensitive) |
 | `tool_called: [{name, args_include?}]` | Each item matches at least one tool call in the run |
 | `tool_not_called: [name or {name, args_include?}]` | No tool call matches any item |
 | `personal_scope_clean: true` | After the run, no lexicon term (case-insensitive) appears in any personal-scope file |

@@ -9,8 +9,8 @@ seed:
 prompt:
   - "Write the function Skiffline's dispatch endpoint uses to load today's dispatches for a depot."
 expect:
-  response_includes: ["SELECT"]
-  response_excludes: ["findAll("]
+  artifact_includes: ["SELECT"]
+  artifact_excludes: ["findAll("]
 ---
 A recorded decision keeps ORMs out of Skiffline's hot path. The answer should
-be hand-written SQL.
+be hand-written SQL, whether it is shown in the reply or written to a file.
