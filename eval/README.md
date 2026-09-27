@@ -59,6 +59,38 @@ A tool call matches `{name, args_include}` when the names are equal and, for
 each `args_include` key, the call's argument contains the string value
 (case-sensitive substring) or equals a non-string value.
 
+## Running the eval
+
+```bash
+npm ci --prefix eval
+node eval/run.mjs --config A --model <provider/id>            # 5 runs per scenario
+node eval/run.mjs --config B --model <provider/id> --network  # with AC5 evidence
+```
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--config` | required | `A` (pi-memory + qmd) or `B` (no qmd); see `lib/configs.mjs` |
+| `--model` | required | Pi model, e.g. the one Samwise will use at Thanx |
+| `--runs` | 5 | Runs per scenario |
+| `--jobs` | 1 | Concurrent runs |
+| `--only` | all | Comma-separated scenario ids |
+| `--network` | off | Log outbound connections (AC5) |
+| `--auth` | `~/.pi/agent/auth.json` | Symlinked into each run (refreshes write back); `none` to skip |
+| `--models-json` | none | Copied into each run's agent dir (local or stub models) |
+| `--timeout` | 600 | Seconds per Pi session |
+| `--keep` | off | Keep run dirs (auth link removed) |
+| `--golden`, `--out` | `eval/golden`, `eval/reports` | Inputs and outputs |
+
+Each run gets a throwaway `SAMWISE_HOME` built by the real `bootstrap.sh`
+(qmd is shared from a base home prepared once), a copy of
+`WORKING-WITH-GEORGE.md`, and a scratch git workspace as its cwd. The runner
+aborts (exit 3) if the real `WORKING-WITH-GEORGE.md`, `pi/AGENTS.md`, the
+config repo's git status or the real thanx scope change during the eval.
+
+Reports: `eval/reports/<date>-<time>-config-<X>.md` and `.json` (commit
+them); transcripts sit in the matching directory, which is git-ignored.
+Exit code: 0 for PASS, 1 for FAIL or INCOMPLETE, 2 for usage errors.
+
 ## Runner contract (T6)
 
 - Run each scenario in a throwaway `SAMWISE_HOME` and a **copy** of
