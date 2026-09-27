@@ -224,3 +224,16 @@ Errors are swallowed; the nudge must never break a session.
   proposal with one leaky personal item, apply after "approve"). It asserts
   the template expanded, the leak was rerouted, the run's personal copy stays
   clean, and the thanx-scope commit carries the trailers.
+
+## Refinements made while planning
+
+1. **Leak patterns tightened** so general lessons are not blocked: IDs are
+   `\b[A-Z]{2,}-\d{2,}\b` except public prefixes (AES, CVE, HTTP, IEEE, ISO,
+   RFC, SHA, TLS, UTF), so `UTF-8`, `SHA-256` and `RFC-9110` pass while
+   `INC-2291` does not; PR refs are `#\d{2,}`, so "rank #1" passes.
+2. **The nudge logic lives in the CLI** (`samwise-reflect nudge` prints a
+   reminder when one is due and records the date); the extension only calls
+   it and shows the output, which keeps the logic testable without a UI.
+3. `SAMWISE_REFLECT_TODAY` overrides today's date for tests.
+4. `bin/samwise-reflect` sources `lib/env.sh`, so it also works from a shell.
+
