@@ -5,6 +5,8 @@
 set -euo pipefail
 
 QMD_VERSION="2.8.3"
+# qmd 2.8.3's default models (embedding, re-ranking, query expansion).
+QMD_MODELS=(embeddinggemma-300M-Q8_0.gguf qwen3-reranker-0.6b-q8_0.gguf qmd-query-expansion-1.7B-q4_k_m.gguf)
 MIN_NODE="22.19" # pi-memory's engines floor
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -89,6 +91,18 @@ if [[ "$("$qmd_bin" --version 2>/dev/null || true)" != "qmd $QMD_VERSION "* ]]; 
   npm install -g --prefix "$SAMWISE_HOME/tools" "@tobilu/qmd@$QMD_VERSION"
 fi
 
+step "Fetching qmd models"
+# All of them now, so a running Samwise never downloads from HuggingFace (AC5).
+# qmd pull records an .etag per model; pull only when one is missing, so
+# re-runs stay offline-safe (a pull re-checks HuggingFace even when cached).
+models_dir="${XDG_CACHE_HOME:-$HOME/.cache}/qmd/models"
+for model in "${QMD_MODELS[@]}"; do
+  if [[ ! -e "$models_dir/$model.etag" ]]; then
+    qmd pull
+    break
+  fi
+done
+
 step "Setting up qmd collection"
 collections="$(qmd collection list)"
 if ! grep -q '^pi-memory ' <<<"$collections"; then
@@ -98,7 +112,7 @@ fi
 qmd context add qmd://pi-memory/daily "Daily append-only work logs organized by date"
 qmd context add qmd://pi-memory "Curated long-term memory: decisions, preferences, facts, lessons"
 qmd update
-qmd embed # first run downloads qmd's default local embedding model
+qmd embed
 
 step "Done"
 cat <<EOF

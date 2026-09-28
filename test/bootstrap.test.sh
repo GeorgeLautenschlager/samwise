@@ -40,6 +40,11 @@ assert_contains "$(in_samwise 'pi list')" "$pinned" "pi list reports pi-memory"
 assert_contains "$(in_samwise 'qmd --version')" "qmd 2.8.3" "qmd 2.8.3 installed in Samwise tools"
 assert_contains "$(in_samwise 'qmd collection list')" "pi-memory (qmd://pi-memory/)" "pi-memory collection exists"
 assert_contains "$(cat "$index_yml")" "daily: Daily append-only work logs organized by date" "daily context set"
+assert_contains "$(cat "$tmp/first.log")" "==> Fetching qmd models" "bootstrap fetches qmd's models"
+for model in embeddinggemma-300M-Q8_0.gguf qwen3-reranker-0.6b-q8_0.gguf qmd-query-expansion-1.7B-q4_k_m.gguf; do
+  [[ -e "$real_cache/qmd/models/$model.etag" ]] || fail "qmd model $model not pulled"
+done
+pass "all three qmd models are pulled, so Samwise never downloads at run time"
 
 # --- no hosted embedding endpoint configured (D2) -----------------------------
 if hits="$(grep -EiH 'https?://|api[_-]?key|QMD_(EMBED|RERANK|GENERATE)_MODEL=' \
@@ -105,6 +110,7 @@ assert_contains "$out" "inside the config repo" "bootstrap refuses a thanx scope
 pass "guard fails before creating anything"
 assert_not_contains "$(cat "$tmp/second.log")" "Installing npm:" "re-run skips pi install"
 assert_not_contains "$(cat "$tmp/second.log")" "added " "re-run skips npm install of qmd"
+assert_not_contains "$(cat "$tmp/second.log")" "Pulling models" "re-run skips pulling models (offline-safe)"
 
 # --- search over a seeded file returns a hit ----------------------------------
 mkdir -p "$home/memory/daily"

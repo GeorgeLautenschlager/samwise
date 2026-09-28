@@ -23,8 +23,9 @@ and never touches your personal `~/.pi/agent`:
 | `tools/` | qmd, pinned |
 | `qmd/` | qmd config and index for the `pi-memory` collection |
 
-The first run downloads qmd's default local embedding model into
-`~/.cache/qmd/models`. No hosted embedding API is used.
+The first run downloads qmd's three local models (embedding, re-ranking and
+query expansion, about 2.1 GB) into `~/.cache/qmd/models`, so a running Samwise
+never needs HuggingFace. No hosted embedding API is used.
 
 ## Run
 
