@@ -117,8 +117,8 @@ logged in the A runs:
 
 - Done: bootstrap now runs `qmd pull` when any of the three qmd models is
   missing, so a running Samwise never contacts HuggingFace.
-- Report upstream: pi-memory leaves qmd running after its search timeout
-  (orphaned processes).
+- Reported upstream as [jayzeng/pi-memory#47](https://github.com/jayzeng/pi-memory/issues/47):
+  pi-memory leaves qmd running after its search timeout (orphaned processes).
 - Semantic search on a CPU-only machine takes ~3.6 s per call; George's Thanx
   laptop (GPU) should be faster. Revisit if searches time out there.
 
