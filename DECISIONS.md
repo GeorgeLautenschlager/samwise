@@ -3,6 +3,31 @@
 Durable decisions for Samwise, newest first. Each entry records what was
 decided, the evidence, and what would reopen it.
 
+## 2026-09-27 — Defer pi-gondolin (T8)
+
+**Decision:** Samwise does not adopt pi-gondolin now. T8 (#9) is moved to the
+epic's parking lot; sandboxing becomes its own brief if Thanx needs it. Q3
+(do memory writes reach the host under gondolin?) is deferred with it.
+
+**Why:**
+
+- **It doesn't serve portability**, which motivated including it. Portability
+  already comes from the declarative, pinned bootstrap; the scope split
+  (personal = this repo, thanx = its own repo); a contract that names no paths;
+  and an eval that re-checks a new machine or model. A micro-VM adds
+  containment (a security property), not portability.
+- **It would cost more than T8 assumed.** `samwise-reflect` runs through the
+  bash tool, so under gondolin it would run inside the VM and need both scope
+  repos and Node mounted there, with write access. The eval would also need to
+  run under gondolin to stay representative.
+- **It isn't battle-tested:** not published on npm, against the brief's first
+  constraint.
+
+**What would reopen this:** Thanx security (Q5) asking for containment of an
+agent that runs commands. Then write a sandboxing brief and use
+`eval/run.mjs` to show memory and `/reflect` still work under it before
+adopting it.
+
 ## 2026-09-27 — Memory stack: config A (pi-memory + qmd)
 
 **Decision:** Samwise uses **config A**, pi-memory 0.4.2 with qmd 2.8.3 for
@@ -109,8 +134,7 @@ logged in the A runs:
 - **Q2** (index raw session transcripts): **no.** A's misses were pointer
   omissions and skipped searches, not logs lacking detail; the seeded logs
   were always found when searched.
-- **Q3** (pi-gondolin): still open, pending T8. The contract names no paths, so
-  only a mount could change.
+- **Q3** (pi-gondolin): deferred with T8; see "Defer pi-gondolin" above.
 - **Q6** (qmd needs Bun): no; qmd 2.8.3 runs on Node (T1).
 
 ### Follow-ups
