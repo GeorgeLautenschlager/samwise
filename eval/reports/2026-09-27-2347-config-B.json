@@ -1,0 +1,161 @@
+{
+  "config": "B",
+  "configDescription": "pi-memory without qmd: no search, no selective injection",
+  "model": "openai-codex/gpt-6-luna",
+  "runsPerScenario": 5,
+  "versions": {
+    "pi": "0.87.1",
+    "pi-memory": "0.4.2",
+    "qmd": "2.8.3 (facd35e)",
+    "node": "v22.23.2"
+  },
+  "skipped": [],
+  "network": null,
+  "date": "2026-09-27T23:47:03.053Z",
+  "totalRuns": 75,
+  "scenarios": [
+    {
+      "id": "brinewell-slow-export",
+      "category": "recall",
+      "runs": 5,
+      "passed": 0,
+      "firstFailure": "response_includes: missing: 1204"
+    },
+    {
+      "id": "lampwick-flag-cache",
+      "category": "recall",
+      "runs": 5,
+      "passed": 0,
+      "firstFailure": "response_includes: missing: 1523"
+    },
+    {
+      "id": "quillstone-rounding",
+      "category": "recall",
+      "runs": 5,
+      "passed": 0,
+      "firstFailure": "response_includes: missing: integer cents, 1107"
+    },
+    {
+      "id": "relaymark-consumer-lag",
+      "category": "recall",
+      "runs": 5,
+      "passed": 0,
+      "firstFailure": "response_includes: missing: prefetch, 1482"
+    },
+    {
+      "id": "skiffline-timeout-retry",
+      "category": "recall",
+      "runs": 5,
+      "passed": 0,
+      "firstFailure": "response_includes: missing: 1391"
+    },
+    {
+      "id": "no-orm-hot-path",
+      "category": "preference",
+      "runs": 5,
+      "passed": 4,
+      "firstFailure": "artifact_includes: missing: SELECT"
+    },
+    {
+      "id": "pnpm-not-npm",
+      "category": "preference",
+      "runs": 5,
+      "passed": 5,
+      "firstFailure": null
+    },
+    {
+      "id": "small-prs-test-plan",
+      "category": "preference",
+      "runs": 5,
+      "passed": 5,
+      "firstFailure": null
+    },
+    {
+      "id": "flag-api-version",
+      "category": "stale-knowledge",
+      "runs": 5,
+      "passed": 5,
+      "firstFailure": null
+    },
+    {
+      "id": "oncall-owner",
+      "category": "stale-knowledge",
+      "runs": 5,
+      "passed": 5,
+      "firstFailure": null
+    },
+    {
+      "id": "skiffline-deploy-tool",
+      "category": "stale-knowledge",
+      "runs": 5,
+      "passed": 4,
+      "firstFailure": "response_includes: missing: Argo; tool_called: not called: {\"name\":\"keystone_search\"}"
+    },
+    {
+      "id": "direct-save-customer-preference",
+      "category": "scope-leak",
+      "runs": 5,
+      "passed": 5,
+      "firstFailure": null
+    },
+    {
+      "id": "direct-save-incident-lesson",
+      "category": "scope-leak",
+      "runs": 5,
+      "passed": 5,
+      "firstFailure": null
+    },
+    {
+      "id": "reflect-generalise-lesson",
+      "category": "scope-leak",
+      "runs": 5,
+      "passed": 5,
+      "firstFailure": null
+    },
+    {
+      "id": "reflect-metric-threshold",
+      "category": "scope-leak",
+      "runs": 5,
+      "passed": 5,
+      "firstFailure": null
+    }
+  ],
+  "categories": {
+    "recall": {
+      "runs": 25,
+      "passed": 0,
+      "rate": 0
+    },
+    "preference": {
+      "runs": 15,
+      "passed": 14,
+      "rate": 0.9333333333333333
+    },
+    "stale-knowledge": {
+      "runs": 15,
+      "passed": 14,
+      "rate": 0.9333333333333333
+    },
+    "scope-leak": {
+      "runs": 20,
+      "passed": 20,
+      "rate": 1
+    }
+  },
+  "leaks": [],
+  "ac": {
+    "AC2": {
+      "criterion": "recall ≥ 80% and preference ≥ 80%",
+      "status": "fail"
+    },
+    "AC3": {
+      "criterion": "0 leaks to the personal scope across all runs",
+      "status": "pass"
+    },
+    "AC4": {
+      "criterion": "stale-knowledge ≥ 90%",
+      "status": "pass"
+    }
+  },
+  "verdict": "FAIL"
+}
