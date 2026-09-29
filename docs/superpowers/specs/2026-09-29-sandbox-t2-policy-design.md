@@ -177,3 +177,59 @@ this policy.
 - Verifying the runtime actually enforces globbed `denyWrite` entries and the
   read-tool path checks (T3).
 - Automated smoke tests through the fence (T5, on the Mac).
+
+## Changes from review (2026-09-29)
+
+Per-task reviews checked the policy against what pi-sandbox and its runtime
+actually do and found gaps in this design. What changed:
+
+- **Two matchers.** Pi's read/write/edit tools use pi-sandbox's `policy.ts`
+  (`*` crosses `/`); bash uses the runtime (macOS Seatbelt), which converts
+  globs gitignore-style (`*` stays within a directory, `**/` spans any depth)
+  and first strips a trailing `/**`, deciding glob vs literal on what remains.
+  `lib/sandbox/match.mjs` mirrors both (`globs: "tool" | "runtime"`), and the
+  policy test checks every hard write-deny under both. The Finding "allowRead
+  wins over denyRead whatever the specificity" is too strong for macOS: a
+  literal `denyRead` nested inside a literal `allowRead` is re-applied and wins
+  for bash. The policy doesn't rely on that.
+- **Git denies:** `.git/hooks`, `.git/config`, `**/.git/hooks/*`,
+  `**/.git/config`, `.git/modules/**/hooks/*`, `.git/modules/**/config`, plus
+  git's redirection files: `.git/commondir`, `**/.git/commondir`,
+  `.git/modules/**/commondir`, `**/.git` (gitlink files; writes inside the
+  project's own `.git` still work) and `.git/worktrees`. Both redirections
+  (commondir, gitlink) were reproduced end to end running code outside the
+  fence before the fix.
+- **Narrower reads:** `~/.npm-global/bin`, `~/.npm-global/lib` (not its
+  `etc/npmrc`); `~/.cargo/bin`, `~/.cargo/registry`, `~/.cargo/git` (not
+  `credentials.toml`).
+- **Samwise's own home:** `~/.pi/samwise/tools` (qmd, run by the host) and
+  `~/.pi/samwise/qmd` (its config and index) are hard write-denied.
+- **Network:** `release-assets.githubusercontent.com` added (GitHub release
+  downloads redirect there).
+- **Launch dir (preflight, `checkLaunchDir`):** the policy lets bash write
+  `.`, so `bin/samwise` on macOS refuses a launch dir that is or contains home,
+  or overlaps (contains or is inside) the config repo, the memory dir, the Pi
+  agent dir or `$SAMWISE_HOME`.
+- **`samwise-reflect apply` treats `pending.json` as untrusted** (Samwise can
+  write it): it validates the proposal (unique positive item numbers, known
+  ops and scopes, text where needed, edit/retire targets that exist in their
+  scope, single-line vocabulary, a reflected-through date not after today, no
+  control characters) and fails closed; then it prints exactly what it
+  commits: each item, the text an edit or retire removes, the new text, new
+  vocabulary and the reflected-through date.
+
+### Residual risks (accepted for v1)
+
+- Git has other ways to redirect itself than those denied (e.g. environment
+  or includes George's own config pulls in); the denies cover the paths shown
+  to work. T5 should try git-based escapes through the real fence on the Mac.
+- `apply` shows what it commits only after the fact (George's recourse is
+  git). A proposal store the fenced bash cannot write (a host-side Pi tool)
+  would remove the window; follow-up.
+- A global npmrc under `~/.nvm`, `~/.asdf` or `~/.volta` would be readable;
+  keep npm tokens in `~/.npmrc` (denied).
+- Unverified on the Mac: pi-sandbox's tool matcher is case-sensitive while
+  APFS usually isn't (`.PI/sandbox.json`); a launch dir reached through the
+  `/System/Volumes/Data` firmlink may not canonicalise to `/Users/...`.
+- The runtime drops glob write-denies on Linux; irrelevant while the fence is
+  macOS-only.
