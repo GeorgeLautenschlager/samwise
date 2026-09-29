@@ -38,17 +38,24 @@ export function parseTranscript(jsonl) {
 // Runs bin/samwise in run.workspace; resolves { code, stdout, stderr, timedOut }.
 export function runPi({ repo, run, model, prompts, network, timeoutMs }) {
 	const extra = { KEYSTONE_MOCK_FILE: run.keystone, PI_MEMORY_EXIT_SUMMARY: "0" };
+	// The fence is macOS-only; elsewhere bin/samwise refuses to start without
+	// this opt-in, so eval runs unfenced there.
+	if (process.platform !== "darwin") extra.SAMWISE_UNSANDBOXED = "1";
 	if (network) {
 		extra.NETLOG_FILE = join(run.dir, "netlog.jsonl");
 		extra.NODE_OPTIONS = `${process.env.NODE_OPTIONS ?? ""} --require ${join(repo, "eval/netlog.cjs")}`.trim();
 	}
 	const args = ["--mode", "json", "--model", model, "-e", join(repo, "eval/keystone-mock.ts"), ...prompts];
 	return new Promise((resolve) => {
+		// On macOS bin/samwise refuses SAMWISE_UNSANDBOXED whatever its value, so
+		// drop one inherited from the caller's environment.
+		const env = samwiseEnv(run.home, extra);
+		if (process.platform === "darwin") delete env.SAMWISE_UNSANDBOXED;
 		// Own process group, so the whole session (e.g. qmd searches pi-memory
 		// gave up on) can be killed when it ends.
 		const child = spawn(join(repo, "bin/samwise"), args, {
 			cwd: run.workspace,
-			env: samwiseEnv(run.home, extra),
+			env,
 			stdio: ["ignore", "pipe", "pipe"],
 			detached: true,
 		});

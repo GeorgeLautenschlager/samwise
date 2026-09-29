@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Install Samwise's memory stack: pi-memory (pinned in pi/settings.json) and
-# qmd (pinned below, default local models only). Safe to re-run: every step
-# checks current state first.
+# Install Samwise's memory stack, pi-memory (pinned in pi/settings.json) and
+# qmd (pinned below, default local models only), and its execution fence,
+# pi-sandbox (pinned in pi/settings.json) with the sandbox policy link. Safe
+# to re-run: every step checks current state first.
 set -euo pipefail
 
 QMD_VERSION="2.8.3"
@@ -73,6 +74,9 @@ link "$repo/pi/AGENTS.md" "$PI_CODING_AGENT_DIR/AGENTS.md"
 link "${SAMWISE_PERSONAL_WISDOM:-$repo/WORKING-WITH-GEORGE.md}" "$PI_CODING_AGENT_DIR/APPEND_SYSTEM.md"
 link "$repo/pi/prompts" "$PI_CODING_AGENT_DIR/prompts"
 link "$repo/pi/extensions" "$PI_CODING_AGENT_DIR/extensions"
+# pi-sandbox writes "Allow for all projects" approvals through this link, so
+# they show up as diffs in the repo (sandbox D3, D8).
+link "$repo/pi/sandbox.json" "$PI_CODING_AGENT_DIR/sandbox.json"
 
 step "Merging Pi settings"
 node "$repo/lib/merge-settings.mjs" "$repo/pi/settings.json" "$PI_CODING_AGENT_DIR/settings.json"
@@ -84,6 +88,9 @@ while IFS= read -r source; do
     pi install "$source" </dev/null
   fi
 done <<<"$missing"
+
+step "Checking sandbox dependencies"
+"$repo/lib/sandbox/deps.sh"
 
 step "Installing qmd $QMD_VERSION"
 qmd_bin="$SAMWISE_HOME/tools/bin/qmd"
@@ -114,10 +121,14 @@ qmd context add qmd://pi-memory "Curated long-term memory: decisions, preference
 qmd update
 qmd embed
 
+step "Checking sandbox policy"
+"$repo/lib/sandbox/drift.sh" "$repo"
+
 step "Done"
 cat <<EOF
   Samwise home: $SAMWISE_HOME
   Memory dir:   $PI_MEMORY_DIR
+  Sandbox:      $repo/pi/sandbox.json
   qmd:          $(qmd --version)
   Launch with:  $repo/bin/samwise
 EOF
