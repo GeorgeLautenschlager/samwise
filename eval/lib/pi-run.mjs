@@ -37,7 +37,8 @@ export function parseTranscript(jsonl) {
 
 // Runs bin/samwise in run.workspace; resolves { code, stdout, stderr, timedOut }.
 export function runPi({ repo, run, model, prompts, network, timeoutMs }) {
-	const extra = { KEYSTONE_MOCK_FILE: run.keystone, PI_MEMORY_EXIT_SUMMARY: "0" };
+	// The fence is macOS-only; eval runs unfenced on Linux (sandbox T1).
+	const extra = { KEYSTONE_MOCK_FILE: run.keystone, PI_MEMORY_EXIT_SUMMARY: "0", SAMWISE_UNSANDBOXED: "1" };
 	if (network) {
 		extra.NETLOG_FILE = join(run.dir, "netlog.jsonl");
 		extra.NODE_OPTIONS = `${process.env.NODE_OPTIONS ?? ""} --require ${join(repo, "eval/netlog.cjs")}`.trim();

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Launch Pi as Samwise, with the environment from lib/env.sh.
+# Launch Pi as Samwise with the execution fence on. pi-sandbox fails open, so
+# refuse to start unless the fence will come up (D7).
 set -euo pipefail
 
 repo="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
@@ -7,4 +8,29 @@ repo="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
 source "$repo/lib/env.sh"
 export PATH="$repo/bin:$PATH" # samwise-reflect
 
+refuse() {
+  printf 'samwise: %s\n' "$1" >&2
+  exit 2
+}
+
+for arg in "$@"; do
+  if [[ "$arg" == --no-sandbox ]]; then
+    refuse "--no-sandbox is not allowed; Samwise always runs with the sandbox (D7)"
+  fi
+done
+
+if [[ "$(uname -s)" != Darwin ]]; then
+  if [[ "${SAMWISE_UNSANDBOXED:-}" != 1 ]]; then
+    refuse "the sandbox only runs on macOS; set SAMWISE_UNSANDBOXED=1 to run unfenced here (dev and eval only)"
+  fi
+  printf 'samwise: WARNING: running WITHOUT the sandbox (SAMWISE_UNSANDBOXED=1)\n' >&2
+  exec pi --no-sandbox "$@"
+fi
+
+if [[ ${SAMWISE_UNSANDBOXED+x} ]]; then
+  refuse "SAMWISE_UNSANDBOXED is not honoured on macOS; unset it"
+fi
+if ! node "$repo/lib/sandbox/preflight.mjs" "$repo" "$PI_CODING_AGENT_DIR" "$PWD"; then
+  refuse "sandbox preflight failed (see above); fix it or re-run bootstrap.sh"
+fi
 exec pi "$@"
