@@ -6,6 +6,7 @@ Configuration for Samwise, George's Pi agent at Thanx.
 
 - Node.js ≥ 22.19 with npm
 - [Pi](https://pi.dev) on `PATH`
+- The sandbox needs macOS (Seatbelt). Bootstrap installs ripgrep with Homebrew if it is missing; elsewhere Samwise runs only unfenced, on request.
 
 ## Install
 
@@ -18,7 +19,7 @@ and never touches your personal `~/.pi/agent`:
 
 | Path | Contents |
 |---|---|
-| `agent/` | Pi agent dir (`PI_CODING_AGENT_DIR`); settings merged from `pi/settings.json`; `AGENTS.md` and `APPEND_SYSTEM.md` link to `pi/AGENTS.md` and `WORKING-WITH-GEORGE.md` |
+| `agent/` | Pi agent dir (`PI_CODING_AGENT_DIR`); settings merged from `pi/settings.json`; `AGENTS.md` and `APPEND_SYSTEM.md` link to `pi/AGENTS.md` and `WORKING-WITH-GEORGE.md`; `sandbox.json` links to `pi/sandbox.json` |
 | `memory/` | The thanx scope: pi-memory data, as its own local git repo (see below) |
 | `tools/` | qmd, pinned |
 | `qmd/` | qmd config and index for the `pi-memory` collection |
@@ -35,6 +36,26 @@ bin/samwise            # Pi with Samwise's environment (see lib/env.sh)
 
 Symlink `bin/samwise` onto your `PATH` if you like; it resolves the repo
 through the link.
+
+## Sandbox
+
+The fence is [pi-sandbox](https://github.com/carderne/pi-sandbox), pinned in
+`pi/settings.json`. It wraps bash in macOS Seatbelt and checks Pi's read, write
+and edit tools against `pi/sandbox.json`.
+
+Policy lives in this repo: `~/.pi/samwise/agent/sandbox.json` links to
+`pi/sandbox.json`, so “Allow for all projects” at a prompt edits this repo.
+Bootstrap reports uncommitted policy changes; commit or revert them. Project-
+local `.pi/sandbox.json` is not allowed: `bin/samwise` refuses to start and
+says to move its entries here.
+
+pi-sandbox fails open, so the fence never runs silently off. `bin/samwise`
+refuses `--no-sandbox` and on macOS runs `lib/sandbox/preflight.mjs` first to
+check the policy link and file, pinned version, and runtime dependencies.
+
+The sandbox runs on macOS only. Elsewhere `bin/samwise` refuses to start unless
+`SAMWISE_UNSANDBOXED=1`; then it warns and runs Pi with the sandbox off. The
+eval runner sets this variable. On macOS the variable is refused.
 
 ## Memory stack
 
