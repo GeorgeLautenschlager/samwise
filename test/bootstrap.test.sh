@@ -153,7 +153,9 @@ cat >"$home/agent/models.json" <<EOF
 } } }
 EOF
 
-(cd "$tmp" && as_clean SAMWISE_UNSANDBOXED=1 PI_OFFLINE=1 PI_MEMORY_EXIT_SUMMARY=0 \
+unsandboxed=()
+[[ "$(uname -s)" == Darwin ]] || unsandboxed=(SAMWISE_UNSANDBOXED=1)
+(cd "$tmp" && as_clean "${unsandboxed[@]}" PI_OFFLINE=1 PI_MEMORY_EXIT_SUMMARY=0 \
   timeout 60 "$REPO/bin/samwise" -p --model stub/stub-model "remember this" </dev/null) \
   >"$tmp/pi.log" 2>&1 || { cat "$tmp/pi.log"; fail "Samwise session against the stub failed"; }
 pass "Samwise session runs against the stub LLM"

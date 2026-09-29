@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Unit tests for bin/samwise, using a stub `pi` that echoes its environment
-# and a stub `uname` to simulate macOS.
+# and a stub `uname` to simulate Linux or macOS.
 set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=lib.sh
@@ -15,6 +15,8 @@ cat >"$tmp/stub/pi" <<'EOF'
 echo "$PI_CODING_AGENT_DIR|$PI_MEMORY_SNAPSHOT|$*"
 EOF
 chmod +x "$tmp/stub/pi"
+printf '#!/usr/bin/env bash\necho Linux\n' >"$tmp/stub/uname"
+chmod +x "$tmp/stub/uname"
 
 # Every launch here is on Linux, where the fence is unsupported: opt in.
 export SAMWISE_UNSANDBOXED=1
@@ -30,6 +32,8 @@ assert_eq "$out" "$tmp/home/agent|per-turn|--no-sandbox" "launcher works through
 
 # The launcher puts the repo's bin/ on PATH, so Samwise can run samwise-reflect.
 mkdir -p "$tmp/stub2"
+printf '#!/usr/bin/env bash\necho Linux\n' >"$tmp/stub2/uname"
+chmod +x "$tmp/stub2/uname"
 cat >"$tmp/stub2/pi" <<'EOF'
 #!/usr/bin/env bash
 command -v samwise-reflect

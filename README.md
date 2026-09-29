@@ -55,7 +55,7 @@ check the policy link and file, pinned version, and runtime dependencies.
 
 The sandbox runs on macOS only. Elsewhere `bin/samwise` refuses to start unless
 `SAMWISE_UNSANDBOXED=1`; then it warns and runs Pi with the sandbox off. The
-eval runner sets this variable. On macOS the variable is refused.
+eval runner sets it off macOS. On macOS the variable is refused.
 
 ## Memory stack
 
