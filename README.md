@@ -60,6 +60,23 @@ The sandbox runs on macOS only. Elsewhere `bin/samwise` refuses to start unless
 `SAMWISE_UNSANDBOXED=1`; then it warns and runs Pi with the sandbox off. The
 eval runner sets it off macOS. On macOS the variable is refused.
 
+Policy: home is unreadable from bash except listed places (`~/dev`, the
+read-only memory dir, toolchains and git identity). Bash may write the project
+dir, temp dirs, `/reflect` proposals and npm cache. Project `.pi/`, git hooks
+and config, Pi's agent dirs and qmd models are hard-denied. Bash reaches only
+package registries and GitHub; model calls come from Pi itself, not bash. Every
+entry's reason is in the file's `_why` map; a new entry needs one before the
+tests pass.
+
+### Adding a host (Q5)
+
+Thanx hosts start empty. On the first legitimate prompt for a Thanx host,
+choose "Allow for all projects"; it lands in `pi/sandbox.json`. Add its `_why`,
+review the diff and commit it.
+
+Samwise commits on branches but cannot read git credentials, so you push with
+`!git push`. Your own `!` commands run outside the sandbox.
+
 ## Memory stack
 
 - **pi-memory**, pinned in `pi/settings.json`: long-term `MEMORY.md`, daily
@@ -100,8 +117,9 @@ change only through `/reflect`, with George's approval (D8):
 2. The helper stamps `as-of` dates, reroutes any personal-bound item that
    contains Thanx vocabulary, IDs, PR refs, Keystone pointers or URLs to the
    thanx scope, and prints **one** numbered diff. Nothing is written yet.
-3. George approves all, some ("all but 2") or none; Samwise runs
-   `samwise-reflect apply [--skip/--only]` or `discard`.
+3. George approves all, some ("all but 2") or none by running
+   `!samwise-reflect apply` (or `--skip`/`--only`, or
+   `!samwise-reflect discard`) himself. `apply` prints each item it commits.
 4. `apply` writes both files and commits in each scope's repo with a
    `reflect: approved run <date>` message and `Reflect-Run`,
    `Reflected-Through` and `Approved-Items` trailers. Only
