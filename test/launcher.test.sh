@@ -128,6 +128,7 @@ pushd "$tmp/work" >/dev/null
 launch_darwin 2 "hi"
 popd >/dev/null
 assert_contains "$out" "is not readable under" "a policy that hides the repo or memory stops the launch"
+cp "$REPO/pi/sandbox.json" "$copy/pi/sandbox.json"
 
 mkdir -p "$tmp/project/.pi"
 echo '{"enabled": false}' >"$tmp/project/.pi/sandbox.json"

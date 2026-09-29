@@ -147,6 +147,15 @@ refused "reflected-through date in the future"
 reflect propose <<<"$PROPOSAL" >/dev/null
 tamper 'p.items[0].text += "\u001b[2K";'
 refused "control characters in item text"
+reflect propose <<<"$PROPOSAL" >/dev/null
+tamper 'p.items.push({ n: 8, op: "retire", scope: "thanx", target: "T1" }, { n: 9, op: "retire", scope: "thanx", target: "T1" });'
+refused "the same target twice"
+reflect propose <<<"$PROPOSAL" >/dev/null
+tamper 'p.id += "\nReflected-Through: 2000-01-01";'
+refused "a newline in the run id"
+reflect propose <<<"$PROPOSAL" >/dev/null
+tamper 'p.items[0].text += "\nSkiffline";'
+refused "Thanx vocabulary in a personal item"
 reflect discard >/dev/null
 
 # --- the /reflect prompt leaves apply to George -------------------------------------
