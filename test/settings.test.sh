@@ -67,3 +67,14 @@ install_fake obj-form 1.9.9
 out="$(missing "$tmp/repo-many.json" "$agent")"
 assert_eq "$out" $'npm:obj-form@2.0.0\ngit:github.com/example/pi-tools@v1' \
   "installed at pin: skipped; wrong version and non-npm: listed"
+
+# --- repo settings: npm packages pinned exactly (sandbox D1) -----------------
+
+unpinned="$(node -e '
+const { packages = [] } = require(process.argv[1]);
+for (const p of packages) {
+	const s = typeof p === "string" ? p : p.source;
+	if (s.startsWith("npm:") && !/^npm:(@[^/@]+\/)?[^/@]+@\d+\.\d+\.\d+$/.test(s)) console.log(s);
+}' "$REPO/pi/settings.json")"
+assert_eq "$unpinned" "" "every npm package in pi/settings.json is pinned to an exact version"
+assert_contains "$(cat "$REPO/pi/settings.json")" '"npm:pi-sandbox@0.6.8"' "pi-sandbox is pinned (D1)"

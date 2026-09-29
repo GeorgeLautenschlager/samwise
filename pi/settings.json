@@ -1,6 +1,7 @@
 {
   "packages": [
-    "npm:pi-memory@0.4.2"
+    "npm:pi-memory@0.4.2",
+    "npm:pi-sandbox@0.6.8"
   ],
   "skills": [
     "../memory/skills"
