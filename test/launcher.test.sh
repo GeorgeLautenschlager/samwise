@@ -44,7 +44,7 @@ assert_eq "$out" "$REPO/bin/samwise-reflect" "launcher puts samwise-reflect on P
 
 # --- execution fence (sandbox D7) --------------------------------------------
 
-# launch <expected-exit|any> <env...> -- <args...>: run the launcher with the
+# launch <expected-exit> <env...> -- <args...>: run the launcher with the
 # echo stub; sets $out (stdout+stderr) and fails if the exit code differs.
 launch() {
   local want="$1" envs=() code=0
@@ -52,7 +52,7 @@ launch() {
   while [[ "$1" != -- ]]; do envs+=("$1"); shift; done
   shift
   out="$(env ${envs[@]+"${envs[@]}"} SAMWISE_HOME="$tmp/home" PATH="$tmp/stub:$PATH" "$REPO/bin/samwise" "$@" 2>&1)" || code=$?
-  [[ "$want" == any || "$code" == "$want" ]] || fail "expected exit $want, got $code: $out"
+  [[ "$code" == "$want" ]] || fail "expected exit $want, got $code: $out"
 }
 
 launch 2 -- --model x --no-sandbox "hi"

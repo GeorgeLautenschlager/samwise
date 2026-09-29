@@ -77,7 +77,7 @@ assert_eq "$(readlink "$home/agent/extensions")" "$REPO/pi/extensions" "extensio
 
 # --- execution fence (sandbox T1) ---------------------------------------------
 assert_eq "$(readlink "$home/agent/sandbox.json")" "$REPO/pi/sandbox.json" \
-  "sandbox.json links to the config repo's policy (D3)"
+  "sandbox.json links to the config repo's policy (sandbox D3)"
 assert_contains "$(in_samwise 'pi list')" "npm:pi-sandbox@0.6.8" "pi list reports pi-sandbox"
 [[ -e "$home/agent/npm/node_modules/pi-sandbox/package.json" ]] || fail "pi-sandbox not installed in the agent dir"
 pass "pi-sandbox is installed in the agent dir"
@@ -153,6 +153,7 @@ cat >"$home/agent/models.json" <<EOF
 } } }
 EOF
 
+# The fence is macOS-only; elsewhere the launcher runs only with the opt-in.
 unsandboxed=()
 [[ "$(uname -s)" == Darwin ]] || unsandboxed=(SAMWISE_UNSANDBOXED=1)
 (cd "$tmp" && as_clean ${unsandboxed[@]+"${unsandboxed[@]}"} PI_OFFLINE=1 PI_MEMORY_EXIT_SUMMARY=0 \

@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
-# Sandbox D8: approvals land in pi/sandbox.json through the agent-dir symlink; report only.
+# Sandbox D8: pi-sandbox writes "Allow for all projects" approvals through the
+# agent dir's sandbox.json symlink, so they land in pi/sandbox.json as repo
+# diffs. Report them (unstaged or staged); never commit, revert or fail.
+# Usage: lib/sandbox/drift.sh <repo>
 set -euo pipefail
 
 repo="$1"

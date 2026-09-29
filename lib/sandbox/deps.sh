@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Sandbox D2: pi-sandbox requires ripgrep (rg) on PATH.
+# Sandbox D2: pi-sandbox needs ripgrep (rg) on PATH, and on macOS its runtime
+# does not check for it, so install it here. `type -P` finds binaries only: a
+# shell function named rg (as on some dev boxes) must not count.
 set -euo pipefail
 
 os="$(uname -s)"

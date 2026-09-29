@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Launch Pi as Samwise with the execution fence on. pi-sandbox fails open, so
-# refuse to start unless the fence will come up (D7).
+# Launch Pi as Samwise, with the environment from lib/env.sh and the execution
+# fence on. pi-sandbox fails open, so refuse to start unless the fence will
+# come up (sandbox D7). Only off macOS, where the fence cannot run, does
+# SAMWISE_UNSANDBOXED=1 start Pi unfenced.
 set -euo pipefail
 
 repo="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
@@ -13,9 +15,11 @@ refuse() {
   exit 2
 }
 
+# Pi sets a boolean flag given as --flag=<value> to true whatever the value, so
+# --no-sandbox=false would switch the fence off too.
 for arg in "$@"; do
   if [[ "$arg" == --no-sandbox || "$arg" == --no-sandbox=* ]]; then
-    refuse "--no-sandbox is not allowed; Samwise always runs with the sandbox (D7)"
+    refuse "--no-sandbox is not allowed; Samwise always runs with the sandbox"
   fi
 done
 
@@ -27,6 +31,8 @@ if [[ "$(uname -s)" != Darwin ]]; then
   exec pi --no-sandbox "$@"
 fi
 
+# The opt-in exists only where the fence cannot run. On macOS refuse it rather
+# than ignore it, so a leftover or inherited opt-in is noticed.
 if [[ ${SAMWISE_UNSANDBOXED+x} ]]; then
   refuse "SAMWISE_UNSANDBOXED is not honoured on macOS; unset it"
 fi

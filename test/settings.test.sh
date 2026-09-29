@@ -77,4 +77,4 @@ for (const p of packages) {
 	if (s.startsWith("npm:") && !/^npm:(@[^/@]+\/)?[^/@]+@\d+\.\d+\.\d+$/.test(s)) console.log(s);
 }' "$REPO/pi/settings.json")"
 assert_eq "$unpinned" "" "every npm package in pi/settings.json is pinned to an exact version"
-assert_contains "$(cat "$REPO/pi/settings.json")" '"npm:pi-sandbox@0.6.8"' "pi-sandbox is pinned (D1)"
+assert_contains "$(cat "$REPO/pi/settings.json")" '"npm:pi-sandbox@0.6.8"' "pi-sandbox is pinned (sandbox D1)"
