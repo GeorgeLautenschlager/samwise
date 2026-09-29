@@ -75,6 +75,18 @@ assert_eq "$(readlink "$home/agent/APPEND_SYSTEM.md")" "$REPO/WORKING-WITH-GEORG
 assert_eq "$(readlink "$home/agent/prompts")" "$REPO/pi/prompts" "prompt templates (/reflect) linked in"
 assert_eq "$(readlink "$home/agent/extensions")" "$REPO/pi/extensions" "extensions (reflect nudge) linked in"
 
+# --- execution fence (sandbox T1) ---------------------------------------------
+assert_eq "$(readlink "$home/agent/sandbox.json")" "$REPO/pi/sandbox.json" \
+  "sandbox.json links to the config repo's policy (D3)"
+assert_contains "$(in_samwise 'pi list')" "npm:pi-sandbox@0.6.8" "pi list reports pi-sandbox"
+[[ -e "$home/agent/npm/node_modules/pi-sandbox/package.json" ]] || fail "pi-sandbox not installed in the agent dir"
+pass "pi-sandbox is installed in the agent dir"
+assert_contains "$(cat "$tmp/first.log")" "==> Checking sandbox dependencies" "bootstrap checks sandbox dependencies"
+if [[ "$(uname -s)" != Darwin ]]; then
+  assert_contains "$(cat "$tmp/first.log")" "Sandbox unsupported on $(uname -s)" "non-macOS: bootstrap says the fence is unsupported"
+fi
+assert_contains "$(cat "$tmp/first.log")" "==> Checking sandbox policy" "bootstrap checks for policy drift"
+
 # A real file in the way is never overwritten.
 other="$tmp/other-home"
 mkdir -p "$other/agent"
@@ -98,6 +110,7 @@ assert_eq "$(git -C "$scope" rev-parse HEAD)" "$scope_head" "thanx scope HEAD un
 assert_eq "$(readlink "$home/agent/APPEND_SYSTEM.md")" "$REPO/WORKING-WITH-GEORGE.md" \
   "re-run repoints a stale APPEND_SYSTEM.md link"
 assert_eq "$(readlink "$home/agent/AGENTS.md")" "$REPO/pi/AGENTS.md" "re-run keeps the AGENTS.md link"
+assert_eq "$(readlink "$home/agent/sandbox.json")" "$REPO/pi/sandbox.json" "re-run keeps the sandbox.json link"
 
 # --- guard: thanx scope may not live inside the config repo (D5) --------------
 probe="$REPO/.guard-probe-home"
@@ -140,7 +153,7 @@ cat >"$home/agent/models.json" <<EOF
 } } }
 EOF
 
-(cd "$tmp" && as_clean PI_OFFLINE=1 PI_MEMORY_EXIT_SUMMARY=0 \
+(cd "$tmp" && as_clean SAMWISE_UNSANDBOXED=1 PI_OFFLINE=1 PI_MEMORY_EXIT_SUMMARY=0 \
   timeout 60 "$REPO/bin/samwise" -p --model stub/stub-model "remember this" </dev/null) \
   >"$tmp/pi.log" 2>&1 || { cat "$tmp/pi.log"; fail "Samwise session against the stub failed"; }
 pass "Samwise session runs against the stub LLM"
