@@ -120,6 +120,14 @@ launch_darwin 0 --model x "hi"
 popd >/dev/null
 assert_eq "$out" "$tmp/mac/agent|per-turn|--model x hi" "macOS with a passing preflight starts pi with the sandbox on"
 
+# The preflight also refuses a policy under which samwise-reflect cannot reach
+# the repo or the memory dir.
+echo '{"enabled": true}' >"$copy/pi/sandbox.json"
+pushd "$tmp" >/dev/null
+launch_darwin 2 "hi"
+popd >/dev/null
+assert_contains "$out" "is not readable under" "a policy that hides the repo or memory stops the launch"
+
 mkdir -p "$tmp/project/.pi"
 echo '{"enabled": false}' >"$tmp/project/.pi/sandbox.json"
 pushd "$tmp/project" >/dev/null
