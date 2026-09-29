@@ -217,12 +217,13 @@ test("dependencies: the runtime's own check is reported, hoisted or nested", asy
 	const { agent } = fixture();
 	assert.match((await checkDependencies(agent))[0], /sandbox-runtime not found/);
 
-	const nested = join(agent, "npm", "node_modules", "pi-sandbox", "node_modules", "@carderne", "sandbox-runtime");
-	installPackage(nested, "@carderne/sandbox-runtime", "0.0.72", { "index.js": runtimeReporting([]) });
+	const hoisted = join(agent, "npm", "node_modules", "@carderne", "sandbox-runtime");
+	installPackage(hoisted, "@carderne/sandbox-runtime", "0.0.72", { "index.js": runtimeReporting([]) });
 	assert.deepEqual(await checkDependencies(agent), []);
 
-	const hoisted = join(agent, "npm", "node_modules", "@carderne", "sandbox-runtime");
-	installPackage(hoisted, "@carderne/sandbox-runtime", "0.0.72", {
+	// A nested copy wins, as it does for Node resolving from pi-sandbox.
+	const nested = join(agent, "npm", "node_modules", "pi-sandbox", "node_modules", "@carderne", "sandbox-runtime");
+	installPackage(nested, "@carderne/sandbox-runtime", "0.0.72", {
 		"index.js": runtimeReporting(["bubblewrap (bwrap) not installed", "socat not installed"]),
 	});
 	assert.deepEqual(await checkDependencies(agent), [
@@ -255,7 +256,7 @@ Expected: FAIL, `Cannot find module '.../lib/sandbox/checks.mjs'`.
 - `checkPolicy(repo)`: `<repo>/pi/sandbox.json` missing → `<path> is missing`; unparseable → `<path> is not valid JSON (<parser message>); pi-sandbox would fall back to its defaults`; not a plain object (array, null, scalar) → `<path> must be a JSON object`; `"enabled": false` → `<path> sets "enabled": false`.
 - `checkProjectPolicy(repo, cwd)`: if `<cwd>/.pi/sandbox.json` exists as a file or a symlink (even broken), one problem: `<that path> exists; move its entries into <repo>/pi/sandbox.json and delete it (a project policy can widen or disable the sandbox)`.
 - `checkPinnedVersion(repo, agentDir)`: read the pin from the `npm:pi-sandbox@<version>` entry of `<repo>/pi/settings.json` `packages` (entries may be strings or `{ source }` objects). No entry → `pi-sandbox is not in <settings path>`; `<agentDir>/npm/node_modules/pi-sandbox/package.json` missing → `pi-sandbox is not installed in <agentDir>; run bootstrap.sh`; different version → `pi-sandbox <installed> is installed but <pinned> is pinned; run bootstrap.sh`.
-- `async checkDependencies(agentDir)`: find `@carderne/sandbox-runtime` at `<agentDir>/npm/node_modules/@carderne/sandbox-runtime` (hoisted, preferred) or `<agentDir>/npm/node_modules/pi-sandbox/node_modules/@carderne/sandbox-runtime` (nested). Neither → `@carderne/sandbox-runtime not found under <agentDir>/npm/node_modules; run bootstrap.sh`. Otherwise dynamically import its entry (`main` from its `package.json`, default `index.js`, via a `file://` URL) and return `SandboxManager.checkDependencies().errors`, each prefixed `sandbox dependency: `.
+- `async checkDependencies(agentDir)`: find `@carderne/sandbox-runtime` the way Node resolves it from pi-sandbox (which loads it with `import.meta.resolve`): `<agentDir>/npm/node_modules/pi-sandbox/node_modules/@carderne/sandbox-runtime` (nested) first, else `<agentDir>/npm/node_modules/@carderne/sandbox-runtime` (hoisted), so the preflight checks the copy pi-sandbox actually runs. Neither → `@carderne/sandbox-runtime not found under <agentDir>/npm/node_modules; run bootstrap.sh`. Otherwise dynamically import its entry (`main` from its `package.json`, default `index.js`, via a `file://` URL) and return `SandboxManager.checkDependencies().errors`, each prefixed `sandbox dependency: `.
 
 `lib/sandbox/preflight.mjs`: CLI, `node lib/sandbox/preflight.mjs <repo> <agent-dir> <cwd>`. Missing arguments → usage line to stderr, exit 2. Runs all five checks, prints each problem to stderr as `samwise: <problem>`, exits 1 if there were any, else exits 0 printing nothing. Header comment with the usage line.
 

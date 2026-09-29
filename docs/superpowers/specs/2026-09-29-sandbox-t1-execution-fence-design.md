@@ -116,7 +116,8 @@ strings:
   `<agent-dir>/npm/node_modules/pi-sandbox/package.json` version must equal the
   version pinned in `<repo>/pi/settings.json`.
 - `checkDependencies(agentDir)` (async): imports `@carderne/sandbox-runtime` from
-  `<agent-dir>/npm/node_modules` (hoisted, or nested under `pi-sandbox`) and
+  `<agent-dir>/npm/node_modules` as Node resolves it from pi-sandbox (nested
+  under `pi-sandbox` first, else hoisted) and
   returns `SandboxManager.checkDependencies().errors`. A missing runtime is
   itself a problem.
 
