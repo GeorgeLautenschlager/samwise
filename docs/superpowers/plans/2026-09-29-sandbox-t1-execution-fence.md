@@ -1,6 +1,6 @@
 # Sandbox T1: Install Execution Fence Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use steward:steward-local-sdd (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Bootstrap installs a pinned pi-sandbox and links the config repo's `sandbox.json`; `bin/samwise` never lets Pi start with the fence silently off; bootstrap reports uncommitted policy changes.
 
@@ -75,27 +75,8 @@ Expected: FAIL with `pi-sandbox is pinned (D1): '"npm:pi-sandbox@0.6.8"' not fou
 
 - [ ] **Step 3: Pin the package and add the policy file**
 
-`pi/settings.json` becomes:
-
-```json
-{
-  "packages": [
-    "npm:pi-memory@0.4.2",
-    "npm:pi-sandbox@0.6.8"
-  ],
-  "skills": [
-    "../memory/skills"
-  ]
-}
-```
-
-Create `pi/sandbox.json` (exactly this, with a trailing newline; it matches how pi-sandbox rewrites the file, `JSON.stringify(config, null, 2) + "\n"`):
-
-```json
-{
-  "enabled": true
-}
-```
+- `pi/settings.json`: add `"npm:pi-sandbox@0.6.8"` to `packages`, after pi-memory. Keep the file's existing 2-space formatting.
+- Create `pi/sandbox.json`: the JSON object `{"enabled": true}`, formatted exactly as pi-sandbox rewrites the file (`JSON.stringify(config, null, 2)` plus a trailing newline), so approvals written through the symlink make minimal diffs. It is a placeholder: pi-sandbox's built-in defaults apply until T2 writes the real policy.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -268,115 +249,15 @@ Expected: FAIL, `Cannot find module '.../lib/sandbox/checks.mjs'`.
 
 - [ ] **Step 3: Implement the checks**
 
-Create `lib/sandbox/checks.mjs`:
+`lib/sandbox/checks.mjs`: ES module, tab-indented, Node built-ins only, header comment explaining that pi-sandbox fails open (if it cannot initialise, bash runs unwrapped and read/write/edit go unchecked, with only a UI notice), so `bin/samwise` runs these first. Every export returns an array of problem strings (empty = pass); the messages must satisfy the regexes in the tests. Interface and behaviour:
 
-```js
-// Preflight checks for the execution fence. pi-sandbox fails open: if it
-// cannot initialise, bash runs unwrapped and read/write/edit go unchecked,
-// with only a UI notice. bin/samwise runs these first and refuses to start Pi
-// on any problem. Each check returns a list of problem strings.
-import { existsSync, lstatSync, readFileSync, realpathSync } from "node:fs";
-import { join } from "node:path";
-import { pathToFileURL } from "node:url";
+- `checkPolicyLink(repo, agentDir)`: `<agentDir>/sandbox.json` must be a symlink whose real path equals the real path of `<repo>/pi/sandbox.json`. Distinguish, in this order: missing (`... is missing; run bootstrap.sh`), not a symlink (`... is not a symlink to <policy>; move it aside and run bootstrap.sh`), broken symlink (`... is a broken symlink; run bootstrap.sh`), points elsewhere (`<link> points to <target>, not <policy>; run bootstrap.sh`). Detect existence with `lstat` so a broken link counts as present.
+- `checkPolicy(repo)`: `<repo>/pi/sandbox.json` missing → `<path> is missing`; unparseable → `<path> is not valid JSON (<parser message>); pi-sandbox would fall back to its defaults`; not a plain object (array, null, scalar) → `<path> must be a JSON object`; `"enabled": false` → `<path> sets "enabled": false`.
+- `checkProjectPolicy(repo, cwd)`: if `<cwd>/.pi/sandbox.json` exists as a file or a symlink (even broken), one problem: `<that path> exists; move its entries into <repo>/pi/sandbox.json and delete it (a project policy can widen or disable the sandbox)`.
+- `checkPinnedVersion(repo, agentDir)`: read the pin from the `npm:pi-sandbox@<version>` entry of `<repo>/pi/settings.json` `packages` (entries may be strings or `{ source }` objects). No entry → `pi-sandbox is not in <settings path>`; `<agentDir>/npm/node_modules/pi-sandbox/package.json` missing → `pi-sandbox is not installed in <agentDir>; run bootstrap.sh`; different version → `pi-sandbox <installed> is installed but <pinned> is pinned; run bootstrap.sh`.
+- `async checkDependencies(agentDir)`: find `@carderne/sandbox-runtime` at `<agentDir>/npm/node_modules/@carderne/sandbox-runtime` (hoisted, preferred) or `<agentDir>/npm/node_modules/pi-sandbox/node_modules/@carderne/sandbox-runtime` (nested). Neither → `@carderne/sandbox-runtime not found under <agentDir>/npm/node_modules; run bootstrap.sh`. Otherwise dynamically import its entry (`main` from its `package.json`, default `index.js`, via a `file://` URL) and return `SandboxManager.checkDependencies().errors`, each prefixed `sandbox dependency: `.
 
-const policyPath = (repo) => join(repo, "pi", "sandbox.json");
-
-function lexists(path) {
-	try {
-		lstatSync(path);
-		return true;
-	} catch {
-		return false;
-	}
-}
-
-// <agent-dir>/sandbox.json must be a symlink to the repo's policy (D3), so
-// pi-sandbox reads, and writes approvals into, the reviewed file.
-export function checkPolicyLink(repo, agentDir) {
-	const link = join(agentDir, "sandbox.json");
-	const policy = policyPath(repo);
-	if (!lexists(link)) return [`${link} is missing; run bootstrap.sh`];
-	if (!lstatSync(link).isSymbolicLink()) return [`${link} is not a symlink to ${policy}; move it aside and run bootstrap.sh`];
-	if (!existsSync(link)) return [`${link} is a broken symlink; run bootstrap.sh`];
-	const target = realpathSync(link);
-	if (!existsSync(policy) || target !== realpathSync(policy)) return [`${link} points to ${target}, not ${policy}; run bootstrap.sh`];
-	return [];
-}
-
-// pi-sandbox ignores an unparseable file and falls back to its defaults.
-export function checkPolicy(repo) {
-	const policy = policyPath(repo);
-	if (!existsSync(policy)) return [`${policy} is missing`];
-	let parsed;
-	try {
-		parsed = JSON.parse(readFileSync(policy, "utf8"));
-	} catch (error) {
-		return [`${policy} is not valid JSON (${error.message}); pi-sandbox would fall back to its defaults`];
-	}
-	if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return [`${policy} must be a JSON object`];
-	if (parsed.enabled === false) return [`${policy} sets "enabled": false`];
-	return [];
-}
-
-// A project-local policy is merged into the global one and can switch the
-// fence off; all policy lives in the config repo instead (D3, D8).
-export function checkProjectPolicy(repo, cwd) {
-	const project = join(cwd, ".pi", "sandbox.json");
-	if (!lexists(project)) return [];
-	return [`${project} exists; move its entries into ${policyPath(repo)} and delete it (a project policy can widen or disable the sandbox)`];
-}
-
-export function checkPinnedVersion(repo, agentDir) {
-	const settings = join(repo, "pi", "settings.json");
-	const { packages = [] } = JSON.parse(readFileSync(settings, "utf8"));
-	const source = packages.map((p) => (typeof p === "string" ? p : p.source)).find((s) => s.startsWith("npm:pi-sandbox@"));
-	if (!source) return [`pi-sandbox is not in ${settings}`];
-	const pinned = source.slice("npm:pi-sandbox@".length);
-	const pkgJson = join(agentDir, "npm", "node_modules", "pi-sandbox", "package.json");
-	if (!existsSync(pkgJson)) return [`pi-sandbox is not installed in ${agentDir}; run bootstrap.sh`];
-	const installed = JSON.parse(readFileSync(pkgJson, "utf8")).version;
-	if (installed !== pinned) return [`pi-sandbox ${installed} is installed but ${pinned} is pinned; run bootstrap.sh`];
-	return [];
-}
-
-// Runs the sandbox runtime's own dependency check, the one pi-sandbox runs at
-// startup (rg, bwrap and socat on Linux; nothing extra on macOS).
-export async function checkDependencies(agentDir) {
-	const modules = join(agentDir, "npm", "node_modules");
-	const dir = [join(modules, "@carderne", "sandbox-runtime"), join(modules, "pi-sandbox", "node_modules", "@carderne", "sandbox-runtime")].find(
-		(d) => existsSync(join(d, "package.json")),
-	);
-	if (!dir) return [`@carderne/sandbox-runtime not found under ${modules}; run bootstrap.sh`];
-	const { main = "index.js" } = JSON.parse(readFileSync(join(dir, "package.json"), "utf8"));
-	const { SandboxManager } = await import(pathToFileURL(join(dir, main)).href);
-	return SandboxManager.checkDependencies().errors.map((e) => `sandbox dependency: ${e}`);
-}
-```
-
-Create `lib/sandbox/preflight.mjs`:
-
-```js
-// Refuse to start Samwise unless the execution fence will come up with the
-// config repo's policy. Prints one line per problem; exit 1 if any.
-// Usage: node lib/sandbox/preflight.mjs <repo> <agent-dir> <cwd>
-import { checkDependencies, checkPinnedVersion, checkPolicy, checkPolicyLink, checkProjectPolicy } from "./checks.mjs";
-
-const [repo, agentDir, cwd] = process.argv.slice(2);
-if (!repo || !agentDir || !cwd) {
-	console.error("usage: preflight.mjs <repo> <agent-dir> <cwd>");
-	process.exit(2);
-}
-
-const problems = [
-	...checkPolicyLink(repo, agentDir),
-	...checkPolicy(repo),
-	...checkProjectPolicy(repo, cwd),
-	...checkPinnedVersion(repo, agentDir),
-	...(await checkDependencies(agentDir)),
-];
-for (const problem of problems) console.error(`samwise: ${problem}`);
-process.exit(problems.length > 0 ? 1 : 0);
-```
+`lib/sandbox/preflight.mjs`: CLI, `node lib/sandbox/preflight.mjs <repo> <agent-dir> <cwd>`. Missing arguments → usage line to stderr, exit 2. Runs all five checks, prints each problem to stderr as `samwise: <problem>`, exits 1 if there were any, else exits 0 printing nothing. Header comment with the usage line.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -529,49 +410,20 @@ Expected: FAIL on the first assertion, `launcher exports env and passes args to 
 
 - [ ] **Step 3: Implement the launcher**
 
-Replace `bin/samwise` with:
+`bin/samwise` keeps its current start (resolve `repo` through symlinks, source `lib/env.sh`, put `$repo/bin` on PATH). Update its header comment to say it also keeps the execution fence on, and that pi-sandbox fails open, so the launcher refuses to start Pi unless the fence will come up (D7). Then, in order:
 
-```bash
-#!/usr/bin/env bash
-# Launch Pi as Samwise, with the environment from lib/env.sh and the execution
-# fence (pi-sandbox) on. pi-sandbox fails open (if it cannot start, bash runs
-# unwrapped), so this refuses to start Pi unless the fence will come up (D7).
-set -euo pipefail
+1. Any argument exactly equal to `--no-sandbox`: print `samwise: --no-sandbox is not allowed; Samwise always runs with the sandbox (D7)` to stderr and exit 2.
+2. `uname -s` is not `Darwin`:
+   - `SAMWISE_UNSANDBOXED` is not exactly `1`: print `samwise: the sandbox only runs on macOS; set SAMWISE_UNSANDBOXED=1 to run unfenced here (dev and eval only)` to stderr, exit 2.
+   - Otherwise print `samwise: WARNING: running WITHOUT the sandbox (SAMWISE_UNSANDBOXED=1)` to stderr and `exec pi --no-sandbox "$@"`.
+3. `Darwin`:
+   - `SAMWISE_UNSANDBOXED` set to any value (even empty): print `samwise: SAMWISE_UNSANDBOXED is not honoured on macOS; unset it` to stderr, exit 2.
+   - Run `node "$repo/lib/sandbox/preflight.mjs" "$repo" "$PI_CODING_AGENT_DIR" "$PWD"`; if it fails, print `samwise: sandbox preflight failed (see above); fix it or re-run bootstrap.sh` to stderr, exit 2.
+   - `exec pi "$@"`.
 
-repo="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
-# shellcheck source=../lib/env.sh
-source "$repo/lib/env.sh"
-export PATH="$repo/bin:$PATH" # samwise-reflect
+All refusals go through one small helper that prints `samwise: <message>` to stderr and exits 2. Mind `set -e` pitfalls: use `if` blocks rather than a trailing `[[ ... ]] && ...` as the last command of a loop.
 
-refuse() { printf 'samwise: %s\n' "$*" >&2; exit 2; }
-
-for arg in "$@"; do
-  if [[ "$arg" == --no-sandbox ]]; then
-    refuse "--no-sandbox is not allowed; Samwise always runs with the sandbox (D7)"
-  fi
-done
-
-if [[ "$(uname -s)" != Darwin ]]; then
-  # The fence is macOS-only. Elsewhere (dev box, eval) run unfenced only on
-  # explicit request, and say so on every launch.
-  [[ "${SAMWISE_UNSANDBOXED:-}" == 1 ]] ||
-    refuse "the sandbox only runs on macOS; set SAMWISE_UNSANDBOXED=1 to run unfenced here (dev and eval only)"
-  printf 'samwise: WARNING: running WITHOUT the sandbox (SAMWISE_UNSANDBOXED=1)\n' >&2
-  exec pi --no-sandbox "$@"
-fi
-
-[[ -z "${SAMWISE_UNSANDBOXED+set}" ]] || refuse "SAMWISE_UNSANDBOXED is not honoured on macOS; unset it"
-node "$repo/lib/sandbox/preflight.mjs" "$repo" "$PI_CODING_AGENT_DIR" "$PWD" ||
-  refuse "sandbox preflight failed (see above); fix it or re-run bootstrap.sh"
-exec pi "$@"
-```
-
-In `eval/lib/pi-run.mjs`, change the first line of `runPi` to add the opt-in, with a comment:
-
-```js
-	// The fence is macOS-only; eval runs on Linux run unfenced (sandbox T1).
-	const extra = { KEYSTONE_MOCK_FILE: run.keystone, PI_MEMORY_EXIT_SUMMARY: "0", SAMWISE_UNSANDBOXED: "1" };
-```
+`eval/lib/pi-run.mjs`: in `runPi`, add `SAMWISE_UNSANDBOXED: "1"` to the `extra` environment object, with a one-line comment that the fence is macOS-only and eval runs on Linux run unfenced (sandbox T1).
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -688,55 +540,17 @@ Expected: FAIL, `deps: non-macOS prints the unsupported notice: 'Sandbox unsuppo
 
 - [ ] **Step 3: Implement the helpers**
 
-Create `lib/sandbox/deps.sh`:
+`lib/sandbox/deps.sh` (executable, `#!/usr/bin/env bash`, `set -euo pipefail`, header comment citing sandbox D2). Takes no arguments. Behaviour:
 
-```bash
-#!/usr/bin/env bash
-# Install what the execution fence needs (sandbox D2). On macOS that is
-# ripgrep, via Homebrew, if no rg binary is on PATH (Seatbelt is built in).
-# Elsewhere the fence is unsupported: nothing to install.
-set -euo pipefail
+- `uname -s` is not `Darwin`: print exactly one line to stdout, `    Sandbox unsupported on <os>: bin/samwise runs here only with SAMWISE_UNSANDBOXED=1 (unfenced).` (4-space indent, `<os>` from `uname -s`), exit 0.
+- `Darwin` and `type -P rg` finds a binary: print nothing, exit 0. (Use `type -P`, not `command -v`: a shell function named `rg` must not count.)
+- `Darwin`, no `rg`, no `brew` binary: print to stderr `bootstrap: ripgrep (rg) is required by the sandbox; install it or Homebrew (https://brew.sh), then re-run`, exit 1.
+- `Darwin`, no `rg`, `brew` present: run `brew install ripgrep`.
 
-os="$(uname -s)"
-if [[ "$os" != Darwin ]]; then
-  echo "    Sandbox unsupported on $os: bin/samwise runs here only with SAMWISE_UNSANDBOXED=1 (unfenced)."
-  exit 0
-fi
-if type -P rg >/dev/null; then
-  exit 0
-fi
-if ! type -P brew >/dev/null; then
-  echo "bootstrap: ripgrep (rg) is required by the sandbox; install it or Homebrew (https://brew.sh), then re-run" >&2
-  exit 1
-fi
-brew install ripgrep
-```
+`lib/sandbox/drift.sh <repo>` (executable, same conventions, header comment citing sandbox D8: approvals land in `pi/sandbox.json` through the agent dir's symlink; report only). Behaviour:
 
-Create `lib/sandbox/drift.sh`:
-
-```bash
-#!/usr/bin/env bash
-# Report uncommitted changes to the sandbox policy (sandbox D8). Approvals made
-# with "Allow for all projects" land in pi/sandbox.json through the agent
-# dir's symlink. Report only: George commits or reverts them.
-# Usage: lib/sandbox/drift.sh <repo>
-set -euo pipefail
-
-repo="$1"
-status="$(git -C "$repo" status --porcelain -- pi/sandbox.json)"
-if [[ -z "$status" ]]; then
-  exit 0
-fi
-echo "    WARNING: uncommitted sandbox policy changes (commit or revert them):"
-printf '    %s\n' "$status"
-git -C "$repo" --no-pager diff HEAD -- pi/sandbox.json | sed 's/^/    /'
-```
-
-Make both executable:
-
-```bash
-chmod +x lib/sandbox/deps.sh lib/sandbox/drift.sh
-```
+- `git -C <repo> status --porcelain -- pi/sandbox.json` empty: print nothing, exit 0.
+- Otherwise print `    WARNING: uncommitted sandbox policy changes (commit or revert them):`, then each status line indented 4 spaces, then `git -C <repo> --no-pager diff HEAD -- pi/sandbox.json` with every line indented 4 spaces (`diff HEAD` so staged and unstaged edits both show). Exit 0. Never stage, commit or revert anything.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -807,45 +621,13 @@ Expected: FAIL, `sandbox.json links to the config repo's policy (D3): expected '
 
 - [ ] **Step 3: Wire bootstrap**
 
-In `bootstrap.sh`:
+Behaviour to add to `bootstrap.sh`:
 
-(a) Replace the header comment (lines 2–4) with:
-
-```bash
-# Install Samwise: pi-memory and pi-sandbox (pinned in pi/settings.json), qmd
-# (pinned below, default local models only) and the sandbox policy link. Safe
-# to re-run: every step checks current state first.
-```
-
-(b) After `link "$repo/pi/extensions" "$PI_CODING_AGENT_DIR/extensions"`, add:
-
-```bash
-# pi-sandbox writes "Allow for all projects" approvals through this link, so
-# they show up as diffs here (sandbox D3, D8).
-link "$repo/pi/sandbox.json" "$PI_CODING_AGENT_DIR/sandbox.json"
-```
-
-(c) After the `Installing Pi packages` step's `done <<<"$missing"` line, add:
-
-```bash
-
-step "Checking sandbox dependencies"
-"$repo/lib/sandbox/deps.sh"
-```
-
-(d) Immediately before `step "Done"`, add:
-
-```bash
-step "Checking sandbox policy"
-"$repo/lib/sandbox/drift.sh" "$repo"
-
-```
-
-(e) In the final `cat <<EOF` block, add a line after `Memory dir:`:
-
-```
-  Sandbox:      $repo/pi/sandbox.json
-```
+- Header comment: mention that bootstrap now also installs pi-sandbox (pinned in `pi/settings.json`) and the sandbox policy link.
+- In the "Linking Samwise context files" step, after the `extensions` link: link `$PI_CODING_AGENT_DIR/sandbox.json` to `$repo/pi/sandbox.json` with the existing `link()` helper, with a one-line comment that pi-sandbox writes "Allow for all projects" approvals through this link, so they show up as diffs in the repo (sandbox D3, D8).
+- New step `step "Checking sandbox dependencies"` right after the "Installing Pi packages" step: runs `"$repo/lib/sandbox/deps.sh"` (a failure stops bootstrap, as `set -e` already does).
+- New step `step "Checking sandbox policy"` immediately before `step "Done"`: runs `"$repo/lib/sandbox/drift.sh" "$repo"`.
+- In the final summary heredoc, add a line after `Memory dir:`, aligned like the others: `  Sandbox:      $repo/pi/sandbox.json`.
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
@@ -869,41 +651,15 @@ Claude-Session: https://claude.ai/code/session_01Sgetz7MVLyfhYa5XRBWjK9"
 
 - [ ] **Step 1: Update the README**
 
-(a) In `## Requirements`, add a bullet:
+Edit `README.md` (keep its tone: short, factual, no marketing):
 
-```markdown
-- macOS for the sandbox (Seatbelt); bootstrap installs ripgrep with Homebrew if
-  it is missing. Elsewhere Samwise runs only unfenced, on request (see below).
-```
-
-(b) In the `## Install` table, change the `agent/` row to also mention the policy link:
-
-```markdown
-| `agent/` | Pi agent dir (`PI_CODING_AGENT_DIR`); settings merged from `pi/settings.json`; `AGENTS.md`, `APPEND_SYSTEM.md` and `sandbox.json` link to `pi/AGENTS.md`, `WORKING-WITH-GEORGE.md` and `pi/sandbox.json` |
-```
-
-(c) After the `## Run` section, add:
-
-```markdown
-## Sandbox
-
-The execution fence is [pi-sandbox](https://github.com/carderne/pi-sandbox),
-pinned in `pi/settings.json`. It wraps bash in macOS Seatbelt and checks Pi's
-read, write and edit tools against the policy in `pi/sandbox.json`.
-
-- **Policy lives here.** `~/.pi/samwise/agent/sandbox.json` links to
-  `pi/sandbox.json`, so choosing "Allow for all projects" at a prompt edits
-  this repo. Bootstrap reports uncommitted policy changes; commit or revert
-  them. A project-local `.pi/sandbox.json` is not allowed: `bin/samwise`
-  refuses to start and says to move its entries here.
-- **It never runs silently off.** pi-sandbox fails open (if it cannot start,
-  bash runs unwrapped), so `bin/samwise` checks first: it refuses
-  `--no-sandbox`, and on macOS runs `lib/sandbox/preflight.mjs` (policy link,
-  policy file, pinned version, the sandbox runtime's own dependency check).
-- **macOS only.** On other platforms `bin/samwise` refuses to start unless
-  `SAMWISE_UNSANDBOXED=1` is set, and then warns and runs Pi with the sandbox
-  off. The eval runner sets it. On macOS the variable is refused.
-```
+- `## Requirements`: add a bullet saying the sandbox needs macOS (Seatbelt), that bootstrap installs ripgrep with Homebrew if it is missing, and that elsewhere Samwise runs only unfenced, on request.
+- `## Install` table, `agent/` row: also say `sandbox.json` links to `pi/sandbox.json`.
+- New `## Sandbox` section after `## Run`, covering:
+  - The fence is pi-sandbox (link `https://github.com/carderne/pi-sandbox`), pinned in `pi/settings.json`; it wraps bash in macOS Seatbelt and checks Pi's read, write and edit tools against `pi/sandbox.json`.
+  - Policy lives in this repo: `~/.pi/samwise/agent/sandbox.json` links to `pi/sandbox.json`, so "Allow for all projects" at a prompt edits this repo; bootstrap reports uncommitted policy changes (commit or revert them). A project-local `.pi/sandbox.json` is not allowed: `bin/samwise` refuses to start and says to move its entries here.
+  - It never runs silently off: pi-sandbox fails open, so `bin/samwise` refuses `--no-sandbox` and on macOS runs `lib/sandbox/preflight.mjs` (policy link, policy file, pinned version, the runtime's dependency check) first.
+  - macOS only: elsewhere `bin/samwise` refuses unless `SAMWISE_UNSANDBOXED=1`, then warns and runs Pi with the sandbox off; the eval runner sets it; on macOS the variable is refused.
 
 - [ ] **Step 2: Run the full suite**
 
