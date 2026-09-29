@@ -1,6 +1,7 @@
 // Build isolated eval runs: a throwaway SAMWISE_HOME wired by the real
 // bootstrap.sh, a copy of the personal scope, seeds, and a scratch workspace.
 import { execFile } from "node:child_process";
+import { existsSync } from "node:fs";
 import { appendFile, copyFile, mkdir, readdir, readFile, symlink, writeFile } from "node:fs/promises";
 import { basename, join, relative, sep } from "node:path";
 import { promisify } from "node:util";
@@ -30,6 +31,13 @@ export function inSamwise(repo, home, script) {
 		env: samwiseEnv(home),
 		maxBuffer: MAX_BUFFER,
 	});
+}
+
+// Apply only an explicitly pending proposal; a failure fails the eval run.
+export async function applyPendingReflect(repo, run) {
+	if (!existsSync(join(run.home, "reflect/pending.json"))) return null;
+	const { stdout } = await inSamwise(repo, run.home, `"${join(repo, "bin/samwise-reflect")}" apply`);
+	return stdout;
 }
 
 // A base home, bootstrapped once per eval, whose tools (qmd) every run shares.
