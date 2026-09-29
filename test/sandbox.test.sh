@@ -65,6 +65,12 @@ git -C "$repo" add pi/sandbox.json
 assert_contains "$("$REPO/lib/sandbox/drift.sh" "$repo")" '+      "example.com"' "drift: a staged edit is reported too"
 assert_eq "$(git -C "$repo" status --porcelain)" "M  pi/sandbox.json" "drift: reports only, never commits or reverts"
 
+mkdir -p "$tmp/not-a-repo/pi"
+code=0
+out="$("$REPO/lib/sandbox/drift.sh" "$tmp/not-a-repo" 2>&1)" || code=$?
+assert_eq "$code" 0 "drift: a config repo that is not a git checkout does not fail bootstrap"
+assert_contains "$out" "cannot check sandbox policy drift" "drift: says it could not check"
+
 # --- the policy file is formatted as pi-sandbox writes it ---------------------
 node -e '
 const text = require("node:fs").readFileSync(process.argv[1], "utf8");

@@ -3,6 +3,10 @@
 set -euo pipefail
 
 repo="$1"
+if ! git -C "$repo" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  printf '    NOTE: cannot check sandbox policy drift (%s is not a git checkout)\n' "$repo"
+  exit 0
+fi
 status="$(git -C "$repo" status --porcelain -- pi/sandbox.json)"
 [[ -n "$status" ]] || exit 0
 
