@@ -98,23 +98,24 @@ In order:
      and exit 2. Otherwise run the preflight; if it fails, exit 2 with its
      messages. Then `exec pi "$@"`.
 
-### `lib/sandbox/preflight.mjs`
+### `lib/sandbox/preflight.mjs` and `lib/sandbox/checks.mjs`
 
 `node lib/sandbox/preflight.mjs <repo> <agent-dir> <cwd>`. Prints one line per
-problem to stderr and exits 1 if there are any, else exits 0 silently.
-Exported functions (for unit tests) return a list of problem strings:
+problem to stderr and exits 1 if there are any, else exits 0 silently. The
+checks live in `checks.mjs` (for unit tests); each returns a list of problem
+strings:
 
 - `checkPolicyLink(repo, agentDir)`: `<agent-dir>/sandbox.json` must be a
   symlink resolving to `<repo>/pi/sandbox.json`.
 - `checkPolicy(repo)`: `pi/sandbox.json` must parse as a JSON object and must
   not set `"enabled": false`.
-- `checkProjectPolicy(cwd)`: `<cwd>/.pi/sandbox.json` must not exist (as a
+- `checkProjectPolicy(repo, cwd)`: `<cwd>/.pi/sandbox.json` must not exist (as a
   file or a symlink). The message says to move its entries into
   `<repo>/pi/sandbox.json`.
 - `checkPinnedVersion(repo, agentDir)`: the installed
   `<agent-dir>/npm/node_modules/pi-sandbox/package.json` version must equal the
   version pinned in `<repo>/pi/settings.json`.
-- `checkDependencies(agentDir)`: imports `@carderne/sandbox-runtime` from
+- `checkDependencies(agentDir)` (async): imports `@carderne/sandbox-runtime` from
   `<agent-dir>/npm/node_modules` (hoisted, or nested under `pi-sandbox`) and
   returns `SandboxManager.checkDependencies().errors`. A missing runtime is
   itself a problem.
@@ -140,7 +141,7 @@ All runnable on Linux:
     warning is printed, other args pass through (existing tests set the opt-in).
   - "Darwin" with `SAMWISE_UNSANDBOXED` set: refused.
   - "Darwin" with a failing preflight (no agent dir): refused, Pi not started.
-- `lib/sandbox/test/preflight.test.mjs` (node:test, temp dirs): each check's
+- `lib/sandbox/test/checks.test.mjs` (node:test, temp dirs): each check's
   pass and fail cases; dependency check with a fake runtime module reporting
   errors and one reporting none.
 - `test/sandbox.test.sh`: `deps.sh` calls `brew install ripgrep` on "Darwin"
