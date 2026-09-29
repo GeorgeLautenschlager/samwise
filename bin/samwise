@@ -14,7 +14,7 @@ refuse() {
 }
 
 for arg in "$@"; do
-  if [[ "$arg" == --no-sandbox ]]; then
+  if [[ "$arg" == --no-sandbox || "$arg" == --no-sandbox=* ]]; then
     refuse "--no-sandbox is not allowed; Samwise always runs with the sandbox (D7)"
   fi
 done

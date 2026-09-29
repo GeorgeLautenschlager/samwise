@@ -55,6 +55,10 @@ launch 2 -- --model x --no-sandbox "hi"
 assert_contains "$out" "--no-sandbox is not allowed" "--no-sandbox is refused (AC3)"
 assert_not_contains "$out" "per-turn" "pi is not started when --no-sandbox is passed"
 
+launch 2 -- --no-sandbox=false "hi"
+assert_contains "$out" "--no-sandbox is not allowed" "--no-sandbox=<value> is refused too (pi treats it as --no-sandbox)"
+assert_not_contains "$out" "per-turn" "pi is not started when --no-sandbox=<value> is passed"
+
 launch 2 -u SAMWISE_UNSANDBOXED -- "hi"
 assert_contains "$out" "only runs on macOS" "non-macOS without the opt-in is refused"
 assert_not_contains "$out" "per-turn" "pi is not started without the opt-in"
