@@ -88,6 +88,7 @@ applied="$(reflect apply --skip 3)"
 assert_contains "$applied" "Applied items 1,2" "apply: partial approval"
 assert_contains "$applied" "Applying [1] add personal: Breakers" "apply: shows each item it commits"
 assert_contains "$applied" "Applying [2] add thanx: Incident order" "apply: shows rerouted items with their scope"
+assert_contains "$applied" "    + Prefer circuit breakers to longer timeouts." "apply: shows the text it commits"
 assert_not_contains "$applied" "Deploys" "apply: skipped items are not shown"
 wwg="$(cat "$config/WORKING-WITH-GEORGE.md")"
 assert_contains "$wwg" $'### Breakers\nas-of: 2026-09-27\n\nPrefer circuit breakers to longer timeouts.' \
