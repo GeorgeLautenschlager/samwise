@@ -88,8 +88,10 @@ approval written through the symlink shows up as a minimal diff.
 
 In order:
 
-1. If any argument is exactly `--no-sandbox`, print an error and exit 2
-   without starting Pi (D7).
+1. If any argument is `--no-sandbox` or starts with `--no-sandbox=`, print an
+   error and exit 2 without starting Pi (D7). Pi parses `--flag=value` and
+   sets boolean extension flags to true whatever the value, so
+   `--no-sandbox=false` would also switch the fence off.
 2. Platform from `uname -s`.
    - **Not `Darwin`:** without `SAMWISE_UNSANDBOXED=1`, print an error
      explaining the fence is macOS-only and how to opt in, and exit 2. With it,
@@ -136,7 +138,8 @@ The memory eval runs on this Linux box; running it fenced is T5's business.
 All runnable on Linux:
 
 - `test/launcher.test.sh` (stub `pi`, stub `uname`):
-  - `--no-sandbox` anywhere in the args exits non-zero and Pi is not started.
+  - `--no-sandbox` (or `--no-sandbox=<value>`) anywhere in the args exits
+    non-zero and Pi is not started.
   - Linux without the opt-in: non-zero exit, Pi not started.
   - Linux with `SAMWISE_UNSANDBOXED=1`: Pi receives `--no-sandbox` first, a
     warning is printed, other args pass through (existing tests set the opt-in).

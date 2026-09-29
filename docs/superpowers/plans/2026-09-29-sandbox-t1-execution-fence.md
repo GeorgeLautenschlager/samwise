@@ -339,6 +339,10 @@ launch 2 -- --model x --no-sandbox "hi"
 assert_contains "$out" "--no-sandbox is not allowed" "--no-sandbox is refused (AC3)"
 assert_not_contains "$out" "per-turn" "pi is not started when --no-sandbox is passed"
 
+launch 2 -- --no-sandbox=false "hi"
+assert_contains "$out" "--no-sandbox is not allowed" "--no-sandbox=<value> is refused too (pi treats it as --no-sandbox)"
+assert_not_contains "$out" "per-turn" "pi is not started when --no-sandbox=<value> is passed"
+
 launch 2 -u SAMWISE_UNSANDBOXED -- "hi"
 assert_contains "$out" "only runs on macOS" "non-macOS without the opt-in is refused"
 assert_not_contains "$out" "per-turn" "pi is not started without the opt-in"
@@ -413,7 +417,7 @@ Expected: FAIL on the first assertion, `launcher exports env and passes args to 
 
 `bin/samwise` keeps its current start (resolve `repo` through symlinks, source `lib/env.sh`, put `$repo/bin` on PATH). Update its header comment to say it also keeps the execution fence on, and that pi-sandbox fails open, so the launcher refuses to start Pi unless the fence will come up (D7). Then, in order:
 
-1. Any argument exactly equal to `--no-sandbox`: print `samwise: --no-sandbox is not allowed; Samwise always runs with the sandbox (D7)` to stderr and exit 2.
+1. Any argument that is `--no-sandbox` or starts with `--no-sandbox=` (Pi parses `--flag=value` and forces boolean extension flags to true whatever the value): print `samwise: --no-sandbox is not allowed; Samwise always runs with the sandbox (D7)` to stderr and exit 2.
 2. `uname -s` is not `Darwin`:
    - `SAMWISE_UNSANDBOXED` is not exactly `1`: print `samwise: the sandbox only runs on macOS; set SAMWISE_UNSANDBOXED=1 to run unfenced here (dev and eval only)` to stderr, exit 2.
    - Otherwise print `samwise: WARNING: running WITHOUT the sandbox (SAMWISE_UNSANDBOXED=1)` to stderr and `exec pi --no-sandbox "$@"`.
