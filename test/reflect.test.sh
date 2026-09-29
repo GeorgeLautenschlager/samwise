@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # samwise-reflect end to end against temp scopes: status, context, propose,
 # a rejected run (no changes), the stale-proposal guard, partial apply with
-# commits and trailers, retirement, and the once-a-day nudge.
+# commits and trailers, retirement, the once-a-day nudge, apply refusing a
+# tampered proposal, and the /reflect prompt leaving apply to George.
 set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=lib.sh
@@ -162,5 +163,5 @@ reflect discard >/dev/null
 prompt="$(cat "$REPO/pi/prompts/reflect.md")"
 assert_contains "$prompt" '!samwise-reflect apply' "prompt: George applies with a ! command"
 assert_contains "$prompt" '!samwise-reflect discard' "prompt: George discards with a ! command"
-assert_contains "$prompt" 'never runs `apply`' "prompt: Samwise never applies"
+assert_contains "$prompt" 'Never run `apply` or `discard` yourself' "prompt: Samwise never applies or discards"
 assert_not_contains "$prompt" '- `samwise-reflect' "prompt: no bullet has Samwise run the command itself (every command is a ! command)"

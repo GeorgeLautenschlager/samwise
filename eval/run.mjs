@@ -156,7 +156,8 @@ async function runTask({ scenario, n }) {
 
 		const { finalText, toolCalls } = parseTranscript(pi.stdout);
 		if ((f.requires ?? []).includes("reflect")) {
-			// George approves by running !samwise-reflect apply; the runner stands in for him so personal_scope_clean checks what an approval writes.
+			// George approves by running !samwise-reflect apply; the runner stands
+			// in for him so personal_scope_clean checks what an approval writes.
 			const applied = await applyPendingReflect(repo, run);
 			if (applied) await writeFile(`${prefix}.reflect-apply.log`, applied);
 		}

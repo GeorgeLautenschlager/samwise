@@ -22,10 +22,10 @@ Run /reflect: turn recent experience into wisdom proposals for George to approve
    JSON
    ```
 
-   Show George the printed diff verbatim and ask him to approve all, some or none.
-5. Stop and wait for George's answer. Samwise does not run `apply` or `discard`. After showing the diff, ask George to approve by running one of these himself in Pi (`!` runs his command outside the sandbox):
+   Show George the printed diff verbatim.
+5. Ask George to approve all, some or none by running one of these himself in Pi (`!` runs his command outside the sandbox), then stop and wait:
    - `!samwise-reflect apply` when he approves everything;
    - `!samwise-reflect apply --skip 2,3` or `!samwise-reflect apply --only 1` when he approves some;
    - `!samwise-reflect discard` when he approves nothing.
 
-Samwise never runs `apply` or `discard` (the sandbox blocks it: the wisdom files are outside what Samwise may write), and never changes the wisdom files any other way.
+Never run `apply` or `discard` yourself: they are George's approval. (`apply` would fail anyway: the wisdom files are outside what you may write.) Never change the wisdom files any other way.
