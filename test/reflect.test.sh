@@ -89,6 +89,8 @@ assert_contains "$applied" "Applied items 1,2" "apply: partial approval"
 assert_contains "$applied" "Applying [1] add personal: Breakers" "apply: shows each item it commits"
 assert_contains "$applied" "Applying [2] add thanx: Incident order" "apply: shows rerouted items with their scope"
 assert_contains "$applied" "    + Prefer circuit breakers to longer timeouts." "apply: shows the text it commits"
+assert_contains "$applied" "New vocabulary (thanx scope): Skiffline" "apply: shows the vocabulary it records"
+assert_contains "$applied" "Reflected through: 2026-09-27" "apply: shows the reflected-through date"
 assert_not_contains "$applied" "Deploys" "apply: skipped items are not shown"
 wwg="$(cat "$config/WORKING-WITH-GEORGE.md")"
 assert_contains "$wwg" $'### Breakers\nas-of: 2026-09-27\n\nPrefer circuit breakers to longer timeouts.' \
@@ -112,9 +114,40 @@ assert_eq "$(reflect status --json)" '{"reflectedThrough":"2026-09-27","unreflec
 # --- personal-only apply still records Reflected-Through; retire deletes ------------
 count="$(git -C "$memory" rev-list --count HEAD)"
 reflect propose <<<'{"items": [{"op": "retire", "target": "P1", "reason": "George marked it wrong"}]}' >/dev/null
-reflect apply >/dev/null
+retired="$(reflect apply)"
+assert_contains "$retired" "    - ### Breakers" "apply: shows the entry text a retire removes"
 assert_eq "$(git -C "$memory" rev-list --count HEAD)" "$((count + 1))" "thanx scope gets a commit even when unchanged"
 assert_not_contains "$(cat "$config/WORKING-WITH-GEORGE.md")" "### Breakers" "retire deletes the entry"
+
+# --- apply treats the pending proposal as untrusted (Samwise can write it) ------
+tamper() { # <JS statement editing p, the stored proposal>
+  node -e '
+const fs = require("node:fs");
+const f = process.argv[1];
+const p = JSON.parse(fs.readFileSync(f, "utf8"));
+'"$1"'
+fs.writeFileSync(f, JSON.stringify(p));' "$home/reflect/pending.json"
+}
+refused() { # <description>: apply must fail and change nothing
+  local before out
+  before="$(snapshot)"
+  if out="$(reflect apply 2>&1)"; then fail "$1: apply accepted a tampered proposal"; fi
+  assert_contains "$out" "pending proposal is invalid" "$1: refused"
+  assert_eq "$(snapshot)" "$before" "$1: nothing written or committed"
+}
+reflect propose <<<"$PROPOSAL" >/dev/null
+tamper 'p.items.push({ ...p.items[0], text: "### Hidden\\nas-of: 2026-09-27\\n\\nInjected." });'
+refused "duplicate item number"
+reflect propose <<<"$PROPOSAL" >/dev/null
+tamper 'p.items.push({ n: 9, op: "retire", scope: "thanx", target: "P99" });'
+refused "retire of an entry not in its scope"
+reflect propose <<<"$PROPOSAL" >/dev/null
+tamper 'p.reflectedThrough = "2099-01-01";'
+refused "reflected-through date in the future"
+reflect propose <<<"$PROPOSAL" >/dev/null
+tamper 'p.items[0].text += "\u001b[2K";'
+refused "control characters in item text"
+reflect discard >/dev/null
 
 # --- the /reflect prompt leaves apply to George -------------------------------------
 prompt="$(cat "$REPO/pi/prompts/reflect.md")"
