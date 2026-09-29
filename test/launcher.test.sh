@@ -51,7 +51,7 @@ launch() {
   shift
   while [[ "$1" != -- ]]; do envs+=("$1"); shift; done
   shift
-  out="$(env "${envs[@]}" SAMWISE_HOME="$tmp/home" PATH="$tmp/stub:$PATH" "$REPO/bin/samwise" "$@" 2>&1)" || code=$?
+  out="$(env ${envs[@]+"${envs[@]}"} SAMWISE_HOME="$tmp/home" PATH="$tmp/stub:$PATH" "$REPO/bin/samwise" "$@" 2>&1)" || code=$?
   [[ "$want" == any || "$code" == "$want" ]] || fail "expected exit $want, got $code: $out"
 }
 

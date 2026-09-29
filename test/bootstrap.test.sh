@@ -14,7 +14,7 @@ real_npm_cache="$(npm config get cache)"
 
 # Run a command as the "clean account": fresh HOME, no inherited Samwise env.
 as_clean() {
-  env -u SAMWISE_HOME -u PI_CODING_AGENT_DIR -u PI_MEMORY_DIR -u PI_MEMORY_SNAPSHOT \
+  env -u SAMWISE_HOME -u SAMWISE_UNSANDBOXED -u PI_CODING_AGENT_DIR -u PI_MEMORY_DIR -u PI_MEMORY_SNAPSHOT \
     -u QMD_CONFIG_DIR -u INDEX_PATH \
     HOME="$tmp" XDG_CACHE_HOME="$real_cache" npm_config_cache="$real_npm_cache" "$@"
 }
@@ -155,7 +155,7 @@ EOF
 
 unsandboxed=()
 [[ "$(uname -s)" == Darwin ]] || unsandboxed=(SAMWISE_UNSANDBOXED=1)
-(cd "$tmp" && as_clean "${unsandboxed[@]}" PI_OFFLINE=1 PI_MEMORY_EXIT_SUMMARY=0 \
+(cd "$tmp" && as_clean ${unsandboxed[@]+"${unsandboxed[@]}"} PI_OFFLINE=1 PI_MEMORY_EXIT_SUMMARY=0 \
   timeout 60 "$REPO/bin/samwise" -p --model stub/stub-model "remember this" </dev/null) \
   >"$tmp/pi.log" 2>&1 || { cat "$tmp/pi.log"; fail "Samwise session against the stub failed"; }
 pass "Samwise session runs against the stub LLM"
