@@ -53,12 +53,37 @@ to start and says to move its entries here.
 
 The fence must never run silently off, and pi-sandbox fails open, so
 `bin/samwise` refuses `--no-sandbox` and on macOS runs
-`lib/sandbox/preflight.mjs` first to check the policy link and file, the pinned
-version and the runtime dependencies; any problem stops the launch.
+`lib/sandbox/preflight.mjs` first. It checks the policy link and file, the
+pinned version, the runtime dependencies, that `samwise-reflect` can read this
+repo and the memory dir and write its proposals, and the launch dir; any
+problem stops the launch.
+
+Bash may write its launch dir, so on macOS `bin/samwise` refuses one that is
+or contains home, or that overlaps (contains or is inside) this repo, the
+memory dir, the Pi agent dir or `~/.pi/samwise`. Start it from a project dir.
 
 The sandbox runs on macOS only. Elsewhere `bin/samwise` refuses to start unless
 `SAMWISE_UNSANDBOXED=1`; then it warns and runs Pi with the sandbox off. The
 eval runner sets it off macOS. On macOS the variable is refused.
+
+Policy: home is unreadable from bash and Pi's tools except listed places
+(`~/dev`, the read-only memory dir, toolchains and git identity). Bash may
+write the project dir, temp dirs, `/reflect` proposals and npm cache.
+Hard-denied for writes: project `.pi/`; git hooks, config and redirection
+files (`commondir`, nested `.git`, `.git/worktrees`), submodules included;
+Pi's agent dirs; Samwise's qmd tools, index and models; `.env*`, `*.pem` and
+`*.key`. Bash reaches only package registries and GitHub; model calls come
+from Pi itself, not bash. Every entry's reason is in the file's `_why` map; a
+new entry needs one before the tests pass.
+
+### Adding a host (Q5)
+
+Thanx hosts start empty. On the first legitimate prompt for a Thanx host,
+choose "Allow for all projects"; it lands in `pi/sandbox.json`. Add its `_why`,
+review the diff and commit it.
+
+Samwise commits on branches but cannot read git credentials, so you push with
+`!git push`. Your own `!` commands run outside the sandbox.
 
 ## Memory stack
 
@@ -100,8 +125,13 @@ change only through `/reflect`, with George's approval (D8):
 2. The helper stamps `as-of` dates, reroutes any personal-bound item that
    contains Thanx vocabulary, IDs, PR refs, Keystone pointers or URLs to the
    thanx scope, and prints **one** numbered diff. Nothing is written yet.
-3. George approves all, some ("all but 2") or none; Samwise runs
-   `samwise-reflect apply [--skip/--only]` or `discard`.
+3. George approves all, some ("all but 2") or none by running
+   `!samwise-reflect apply` (or `--skip`/`--only`, or
+   `!samwise-reflect discard`) himself; Samwise never runs them. Samwise can
+   write the pending proposal, so `apply` validates it and refuses, changing
+   nothing, if it is malformed or not what `propose` would store. It prints
+   what it commits: each item, the text an edit or retire removes, the new
+   text, new vocabulary and the reflected-through date.
 4. `apply` writes both files and commits in each scope's repo with a
    `reflect: approved run <date>` message and `Reflect-Run`,
    `Reflected-Through` and `Approved-Items` trailers. Only

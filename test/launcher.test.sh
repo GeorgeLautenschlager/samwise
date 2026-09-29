@@ -76,12 +76,13 @@ mkdir -p "$tmp/darwin"
 printf '#!/usr/bin/env bash\necho Darwin\n' >"$tmp/darwin/uname"
 chmod +x "$tmp/darwin/uname"
 
+launcher="$REPO/bin/samwise"
 # launch_darwin <expected-exit> <args...>: launch as macOS with home $tmp/mac
 # from the current directory; SAMWISE_UNSANDBOXED stays as the caller set it.
 launch_darwin() {
   local want="$1" code=0
   shift
-  out="$(SAMWISE_HOME="$tmp/mac" PATH="$tmp/darwin:$tmp/stub:$PATH" "$REPO/bin/samwise" "$@" 2>&1)" || code=$?
+  out="$(SAMWISE_HOME="$tmp/mac" PATH="$tmp/darwin:$tmp/stub:$PATH" "$launcher" "$@" 2>&1)" || code=$?
   [[ "$code" == "$want" ]] || fail "expected exit $want, got $code: $out"
 }
 
@@ -98,20 +99,36 @@ assert_not_contains "$out" "per-turn" "pi is not started when the preflight fail
 
 # A home that passes the preflight: linked policy, pinned pi-sandbox, a
 # runtime reporting no missing dependencies.
-pin="$(node -p 'require(process.argv[1]).packages.find((p) => p.startsWith("npm:pi-sandbox@")).split("@")[1]' "$REPO/pi/settings.json")"
+# The policy only lets bash read the config repo where it normally lives
+# (~/dev), so launch a copy under the temp dir, which it can always read.
+copy="$tmp/repo"
+mkdir -p "$copy"
+cp -R "$REPO/bin" "$REPO/lib" "$REPO/pi" "$copy/"
+launcher="$copy/bin/samwise"
+pin="$(node -p 'require(process.argv[1]).packages.find((p) => p.startsWith("npm:pi-sandbox@")).split("@")[1]' "$copy/pi/settings.json")"
 mods="$tmp/mac/agent/npm/node_modules"
 mkdir -p "$mods/pi-sandbox" "$mods/@carderne/sandbox-runtime"
-ln -s "$REPO/pi/sandbox.json" "$tmp/mac/agent/sandbox.json"
+ln -s "$copy/pi/sandbox.json" "$tmp/mac/agent/sandbox.json"
 printf '{"name":"pi-sandbox","version":"%s"}' "$pin" >"$mods/pi-sandbox/package.json"
 printf '{"name":"@carderne/sandbox-runtime","version":"0.0.72","type":"module","main":"./index.js"}' \
   >"$mods/@carderne/sandbox-runtime/package.json"
 echo 'export const SandboxManager = { checkDependencies: () => ({ errors: [], warnings: [] }) };' \
   >"$mods/@carderne/sandbox-runtime/index.js"
 
-pushd "$tmp" >/dev/null # a launch dir without .pi/sandbox.json
+mkdir -p "$tmp/work"
+pushd "$tmp/work" >/dev/null # a launch dir without .pi/sandbox.json
 launch_darwin 0 --model x "hi"
 popd >/dev/null
 assert_eq "$out" "$tmp/mac/agent|per-turn|--model x hi" "macOS with a passing preflight starts pi with the sandbox on"
+
+# The preflight also refuses a policy under which samwise-reflect cannot reach
+# the repo or the memory dir.
+echo '{"enabled": true}' >"$copy/pi/sandbox.json"
+pushd "$tmp/work" >/dev/null
+launch_darwin 2 "hi"
+popd >/dev/null
+assert_contains "$out" "is not readable under" "a policy that hides the repo or memory stops the launch"
+cp "$REPO/pi/sandbox.json" "$copy/pi/sandbox.json"
 
 mkdir -p "$tmp/project/.pi"
 echo '{"enabled": false}' >"$tmp/project/.pi/sandbox.json"
@@ -119,3 +136,9 @@ pushd "$tmp/project" >/dev/null
 launch_darwin 2 "hi"
 popd >/dev/null
 assert_contains "$out" ".pi/sandbox.json exists" "a project .pi/sandbox.json stops the launch"
+
+# Launching from the config repo itself would let Samwise write its own policy.
+pushd "$copy" >/dev/null
+launch_darwin 2 "hi"
+popd >/dev/null
+assert_contains "$out" "overlaps the config repo" "launching from the config repo is refused"

@@ -80,12 +80,16 @@ assert_contains "$b_transcript" "@tobilu/qmd" "config B: pi-memory reports qmd u
 # --- /reflect through a Samwise session -------------------------------------------
 eval_run "$tmp/reflect" --config A --runs 1 --only runner-reflect --keep >"$tmp/reflect.log" 2>&1 || true
 assert_eq "$(jq_node "$tmp/reflect" 'r.scenarios.map((s) => `${s.id}:${s.passed}/${s.runs}`).join(" ")')" \
-  '"runner-reflect:1/1"' "/reflect scenario passes (personal scope clean, apply ran)"
+  '"runner-reflect:1/1"' "/reflect scenario passes (Samwise asks George to apply; personal scope clean)"
 reflect_transcript="$(cat "$(ls -d "$tmp/reflect"/*/)"/runner-reflect-1.jsonl)"
 assert_contains "$reflect_transcript" "Wisdom entries" "/reflect template expanded and context ran"
 assert_contains "$reflect_transcript" "rerouted from personal" "the helper rerouted the leaky personal item"
 kept="$(sed -n 's/^eval: kept run dirs in //p' "$tmp/reflect.log")"
 run_dir="$kept/runs/runner-reflect-1"
+assert_contains "$(cat "$(ls -d "$tmp/reflect"/*/)"/runner-reflect-1.reflect-apply.log)" "Applied items 1,2" \
+  "the runner applied the pending proposal, as George would"
+[[ ! -e "$run_dir/home/reflect/pending.json" ]] || fail "the proposal is still pending after the run"
+pass "no proposal left pending"
 assert_contains "$(cat "$run_dir/home/memory/MEMORY.md")" "Skiffline carrier calls need a circuit breaker." "leaky lesson landed in the thanx scope"
 assert_contains "$(cat "$run_dir/personal/WORKING-WITH-GEORGE.md")" "### Breakers" "general lesson landed in the personal copy"
 assert_contains "$(git -C "$run_dir/home/memory" log -1 --format=%B)" "Reflect-Run: " "thanx-scope commit is an approved /reflect commit"

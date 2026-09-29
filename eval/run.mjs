@@ -11,7 +11,7 @@ import { CONFIGS } from "./lib/configs.mjs";
 import { scoreRun } from "./lib/expect.mjs";
 import { parseTranscript, reapRun, runPi } from "./lib/pi-run.mjs";
 import { renderMarkdown, summarize } from "./lib/report.mjs";
-import { createRun, exec, inSamwise, personalFiles, prepareBase } from "./lib/sandbox.mjs";
+import { applyPendingReflect, createRun, exec, inSamwise, personalFiles, prepareBase } from "./lib/sandbox.mjs";
 import { loadLexicon, loadScenario, validateScenario } from "./lib/scenario.mjs";
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -155,6 +155,12 @@ async function runTask({ scenario, n }) {
 		if (opts.network) await writeFile(`${prefix}.netlog.jsonl`, network.map((e) => JSON.stringify(e)).join("\n"));
 
 		const { finalText, toolCalls } = parseTranscript(pi.stdout);
+		if ((f.requires ?? []).includes("reflect")) {
+			// George approves by running !samwise-reflect apply; the runner stands
+			// in for him so personal_scope_clean checks what an approval writes.
+			const applied = await applyPendingReflect(repo, run);
+			if (applied) await writeFile(`${prefix}.reflect-apply.log`, applied);
+		}
 		const scored = scoreRun(f.expect, { finalText, toolCalls, personalFiles: await personalFiles(run) }, lexicon);
 		const error = pi.timedOut ? `timed out after ${opts.timeout}s` : pi.code !== 0 ? `pi exited ${pi.code}` : null;
 		const pass = !error && scored.pass;

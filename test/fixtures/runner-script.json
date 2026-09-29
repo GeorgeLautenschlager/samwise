@@ -100,15 +100,7 @@
       "when": "Approve everything",
       "steps": [
         {
-          "tool": {
-            "name": "bash",
-            "args": {
-              "command": "samwise-reflect apply"
-            }
-          }
-        },
-        {
-          "text": "Applied."
+          "text": "Run !samwise-reflect apply to apply it."
         }
       ]
     },
