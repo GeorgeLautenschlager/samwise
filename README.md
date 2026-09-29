@@ -6,7 +6,9 @@ Configuration for Samwise, George's Pi agent at Thanx.
 
 - Node.js ≥ 22.19 with npm
 - [Pi](https://pi.dev) on `PATH`
-- The sandbox needs macOS (Seatbelt). Bootstrap installs ripgrep with Homebrew if it is missing; elsewhere Samwise runs only unfenced, on request.
+- macOS for the sandbox (Seatbelt); bootstrap installs its ripgrep dependency
+  with Homebrew if missing. Elsewhere Samwise runs only unfenced, on request
+  (see [Sandbox](#sandbox)).
 
 ## Install
 
@@ -44,14 +46,15 @@ The fence is [pi-sandbox](https://github.com/carderne/pi-sandbox), pinned in
 and edit tools against `pi/sandbox.json`.
 
 Policy lives in this repo: `~/.pi/samwise/agent/sandbox.json` links to
-`pi/sandbox.json`, so “Allow for all projects” at a prompt edits this repo.
-Bootstrap reports uncommitted policy changes; commit or revert them. Project-
-local `.pi/sandbox.json` is not allowed: `bin/samwise` refuses to start and
-says to move its entries here.
+`pi/sandbox.json`, so "Allow for all projects" at a prompt edits this repo.
+Bootstrap reports uncommitted policy changes; commit or revert them. A
+project-local `.pi/sandbox.json` is not allowed: on macOS `bin/samwise` refuses
+to start and says to move its entries here.
 
-pi-sandbox fails open, so the fence never runs silently off. `bin/samwise`
-refuses `--no-sandbox` and on macOS runs `lib/sandbox/preflight.mjs` first to
-check the policy link and file, pinned version, and runtime dependencies.
+The fence must never run silently off, and pi-sandbox fails open, so
+`bin/samwise` refuses `--no-sandbox` and on macOS runs
+`lib/sandbox/preflight.mjs` first to check the policy link and file, the pinned
+version and the runtime dependencies; any problem stops the launch.
 
 The sandbox runs on macOS only. Elsewhere `bin/samwise` refuses to start unless
 `SAMWISE_UNSANDBOXED=1`; then it warns and runs Pi with the sandbox off. The
