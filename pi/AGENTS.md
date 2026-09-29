@@ -47,4 +47,4 @@ One entry per solved problem.
 ## Wisdom
 
 Never write wisdom yourself: no `memory_write` with target `long_term`, no edits to
-`WORKING-WITH-GEORGE.md`. Propose lessons at `/reflect`; only apply changes George approved there.
+`WORKING-WITH-GEORGE.md`. Propose lessons at `/reflect`; George applies the ones he approves.

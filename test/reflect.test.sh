@@ -84,7 +84,11 @@ git -C "$memory" checkout -q MEMORY.md
 
 # --- partial apply ------------------------------------------------------------------
 reflect propose <<<"$PROPOSAL" >/dev/null
-assert_contains "$(reflect apply --skip 3)" "Applied items 1,2" "apply: partial approval"
+applied="$(reflect apply --skip 3)"
+assert_contains "$applied" "Applied items 1,2" "apply: partial approval"
+assert_contains "$applied" "Applying [1] add personal: Breakers" "apply: shows each item it commits"
+assert_contains "$applied" "Applying [2] add thanx: Incident order" "apply: shows rerouted items with their scope"
+assert_not_contains "$applied" "Deploys" "apply: skipped items are not shown"
 wwg="$(cat "$config/WORKING-WITH-GEORGE.md")"
 assert_contains "$wwg" $'### Breakers\nas-of: 2026-09-27\n\nPrefer circuit breakers to longer timeouts.' \
   "personal entry written with an as-of date"
@@ -110,3 +114,9 @@ reflect propose <<<'{"items": [{"op": "retire", "target": "P1", "reason": "Georg
 reflect apply >/dev/null
 assert_eq "$(git -C "$memory" rev-list --count HEAD)" "$((count + 1))" "thanx scope gets a commit even when unchanged"
 assert_not_contains "$(cat "$config/WORKING-WITH-GEORGE.md")" "### Breakers" "retire deletes the entry"
+
+# --- the /reflect prompt leaves apply to George -------------------------------------
+prompt="$(cat "$REPO/pi/prompts/reflect.md")"
+assert_contains "$prompt" '!samwise-reflect apply' "prompt: George applies with a ! command"
+assert_contains "$prompt" '!samwise-reflect discard' "prompt: George discards with a ! command"
+assert_contains "$prompt" 'never runs `apply`' "prompt: Samwise never applies"
