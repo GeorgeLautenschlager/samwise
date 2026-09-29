@@ -130,8 +130,11 @@ full bootstrap run. Both honour `uname`/`brew`/`git` from `PATH`.
 
 ### Eval runner
 
-`eval/lib/pi-run.mjs` sets `SAMWISE_UNSANDBOXED=1` in the child environment.
-The memory eval runs on this Linux box; running it fenced is T5's business.
+`eval/lib/pi-run.mjs` sets `SAMWISE_UNSANDBOXED=1` in the child environment
+off macOS, and removes an inherited one on macOS (where the launcher refuses
+it), so eval runs unfenced on this Linux box and fenced on the Mac (T5).
+The test suite is host-independent the same way, and runs under macOS's stock
+bash 3.2.
 
 ## Testing
 
