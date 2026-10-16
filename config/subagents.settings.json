@@ -1,0 +1,9 @@
+{
+  "subagents": {
+    "agentOverrides": {
+      "foreman": { "model": "openai/gpt-6.1-sol" },
+      "worker": { "model": "openai/gpt-6-luna" },
+      "scout": { "model": "openai/gpt-6-luna" }
+    }
+  }
+}
