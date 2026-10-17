@@ -35,6 +35,17 @@ test("relative memory roots resolve absolutely before file routing", () => {
   assert.equal(resolveMemoryDir("episodes"), resolve("episodes"));
 });
 
+test("prompt requires source IDs to be copied verbatim with their separator", async () => fixture(async (_root, sessions, memory) => {
+  const sessionId = "01a144e8-9cd4-767e-afb1-4ef6ae5e486d";
+  const entryId = "a5f3fa23";
+  mkdirSync(sessions, { recursive: true });
+  writeFileSync(join(sessions, "session.jsonl"), `${JSON.stringify({ type: "session", id: sessionId })}\n${JSON.stringify(row(entryId, null, "user", "Record this activity"))}\n${JSON.stringify(row("assistant-entry", entryId, "assistant", "Recorded", undefined, "stop"))}\n`);
+  let prompt = "";
+  await consolidate({ sessionsDir: sessions, memoryDir: memory, model: validModel((value) => { prompt = value; }) });
+  assert.ok(prompt.includes(`${sessionId}/${entryId}`));
+  assert.ok(prompt.includes('Copy each cited source ID exactly as written, byte-for-byte, including the "/" separator; never shorten, reconstruct, or combine ID components.'));
+}));
+
 test("same-day limited runs revise one digest and extend plain sources", async () => fixture(async (_root, sessions, memory) => {
   writeSession(sessions, [row("u1", null, "user", "first"), row("a1", "u1", "assistant", "done", undefined, "stop")]);
   const calls: string[] = [];
