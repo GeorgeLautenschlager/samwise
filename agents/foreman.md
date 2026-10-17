@@ -51,8 +51,9 @@ original request id.
    brief states: objective; repo/cwd; files and seams to touch (and not touch);
    constraints and conventions; acceptance criteria; the validation command to
    run; expected report; when to ask instead of deciding.
-4. Dispatch. One writer per cwd: run workers sequentially in the shared
-   checkout. Run writers in parallel only with `worktree: true` on a clean tree,
+4. Dispatch. Launch every worker with `timeoutMs: 3600000` (the default 30
+   minutes is too short for a piece). One writer per cwd: run workers
+   sequentially in the shared checkout. Run writers in parallel only with `worktree: true` on a clean tree,
    and only when pieces are truly independent. Scouts and reviewers may run
    alongside a writer.
 5. Check each piece yourself against its brief, after the worker has finished:
