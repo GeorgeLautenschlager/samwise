@@ -1,15 +1,22 @@
 import { existsSync, mkdirSync, openSync, closeSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { advanceOperation, applyOperation, buildRecordContext, loadRecordIndex, renderOperation, validateOperations, type DigestItem, type RecordOperation, type RecordSource, type RecordIndex } from "./records.ts";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { parse, stringify } from "yaml";
 import { planTranscriptSpans, readTranscriptSnapshot, type PlannedSpan, type SpanPlan, type TranscriptEntry } from "./transcript.ts";
 
-export interface DigestItem { label: "stated" | "observed" | "inferred"; text: string; citations: string[] }
+export type { DigestItem } from "./records.ts";
 export interface DigestOutput { projects: string[]; tags: string[]; sections: Record<string, DigestItem[]> }
 export interface ModelAdapter { consolidate(prompt: string): Promise<string> }
-export interface ConsolidateOptions { sessionsDir?: string; memoryDir?: string; maxEntries?: number; dryRun?: boolean; model?: ModelAdapter; afterDigestWrite?: (date: string) => void }
+export interface ConsolidateOptions { sessionsDir?: string; memoryDir?: string; maxEntries?: number; dryRun?: boolean; model?: ModelAdapter; afterDigestWrite?: (date: string) => void; afterRecordWrite?: (operation: RecordOperation) => void; afterOutputWrite?: (kind: string, index: number) => void }
 interface DigestFrontmatter { type: "digest"; date: string; derived: true; projects: string[]; tags: string[]; sources: Array<{ sessionId: string; entryIds: string[] }> }
-interface ConsolidationState { version: 1; processedIdentities: string[]; lastSuccessfulRun: string | null }
+interface ConsolidationState { version: 1 | 2; processedIdentities: string[]; lastSuccessfulRun: string | null }
+interface PendingBatch { version: 1; operations: RecordOperation[]; digests: Array<{ date: string; content: string }>; state: ConsolidationState }
+function validateState(value: unknown, message: string): asserts value is ConsolidationState {
+  const state = value as ConsolidationState | null;
+  if (!state || ![1, 2].includes(state.version) || !Array.isArray(state.processedIdentities) || state.processedIdentities.some((id) => typeof id !== "string") || !(state.lastSuccessfulRun === null || (typeof state.lastSuccessfulRun === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/.test(state.lastSuccessfulRun) && !Number.isNaN(Date.parse(state.lastSuccessfulRun))))) throw new Error(message);
+}
 const headings = ["Work undertaken", "Outcomes", "Significant decisions", "Changes of plan and interruptions", "Carry-forward items"] as const;
 
 export function resolveMemoryDir(memoryDir?: string): string {
@@ -18,14 +25,7 @@ export function resolveMemoryDir(memoryDir?: string): string {
 function digestPath(dir: string, date: string): string { return join(dir, "digests", `${date}.md`); }
 function readDigest(path: string): { frontmatter: DigestFrontmatter; body: string } | undefined {
   if (!existsSync(path)) return undefined;
-  const raw = readFileSync(path, "utf8").replaceAll("\r\n", "\n");
-  const match = raw.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
-  if (!match) throw new Error(`Invalid digest frontmatter: ${path}`);
-  let metadata: unknown;
-  try { metadata = parse(match[1]); } catch (error) { throw new Error(`Invalid digest YAML: ${path}`, { cause: error }); }
-  const value = metadata as Partial<DigestFrontmatter> | null;
-  if (!value || value.type !== "digest" || typeof value.date !== "string" || value.derived !== true || !Array.isArray(value.projects) || value.projects.some((item) => typeof item !== "string") || !Array.isArray(value.tags) || value.tags.some((item) => typeof item !== "string") || !Array.isArray(value.sources) || value.sources.some((source) => !source || typeof source.sessionId !== "string" || !Array.isArray(source.entryIds) || source.entryIds.some((id) => typeof id !== "string"))) throw new Error(`Invalid digest metadata: ${path}`);
-  return { frontmatter: value as DigestFrontmatter, body: match[2] };
+  return readDigestText(readFileSync(path, "utf8"), path);
 }
 function coverageFrom(dir: string, snapshot: ReturnType<typeof readTranscriptSnapshot>): Set<string> {
   const identities = new Set<string>();
@@ -33,7 +33,7 @@ function coverageFrom(dir: string, snapshot: ReturnType<typeof readTranscriptSna
   if (existsSync(statePath)) {
     let state: ConsolidationState;
     try { state = JSON.parse(readFileSync(statePath, "utf8")) as ConsolidationState; } catch { throw new Error(`Invalid state file: ${statePath}`); }
-    if (state.version !== 1 || !Array.isArray(state.processedIdentities) || state.processedIdentities.some((id) => typeof id !== "string")) throw new Error(`Invalid state file: ${statePath}`);
+    validateState(state, `Invalid state file: ${statePath}`);
     for (const identity of state.processedIdentities) identities.add(identity);
   }
   const bySource = new Map(snapshot.entries.map((entry) => [`${entry.sessionId}\0${entry.id}`, entry.identity]));
@@ -53,10 +53,13 @@ function contextEntry(entry: TranscriptEntry): string {
   const id = `${entry.sessionId}/${entry.id}`;
   return JSON.stringify({ source: id, role: entry.role, text: entry.text, toolCalls: entry.toolCalls, toolResults: entry.toolResults, branch: entry.abandoned ? "abandoned exploration (not adopted unless explicitly stated)" : "active" });
 }
-export function buildPrompt(span: PlannedSpan, context: TranscriptEntry[], priorBody = "", priorSources: string[] = []): string {
+export function buildPrompt(span: PlannedSpan, context: TranscriptEntry[], priorBody = "", priorSources: string[] = [], records = { commitments: [], episodes: [] } as ReturnType<typeof buildRecordContext>): string {
   const sessionPairs = [...new Set([...priorSources, ...span.entries.map((entry) => `${entry.sessionId}/${entry.id}`)])];
   return [
-    "Create a concise daily memory from the new transcript entries. Return JSON only with shape {projects:string[],tags:string[],sections:{<exact heading>: [{label:'stated'|'observed'|'inferred',text:string,citations:string[]}]}}.",
+    "Return one strict JSON object: {digest:{projects:string[],tags:string[],sections:{<exact heading>:[{label:'stated'|'observed'|'inferred',text,citations:string[]}]}},operations:[...]}. No extra envelope keys.",
+    `Digest headings are exactly ${headings.join(", ")}; every heading maps to an array of DigestItems. Operations: create-episode {kind:'create-episode',localKey,fields:{title,status:'open'|'resolved'|'abandoned',projects,tags},sections}; update-episode {kind:'update-episode',id,fields?:{title,status,projects,tags},sections?}; create-commitment {kind:'create-commitment',localKey,fields:{title,kind:'request'|'commitment',owner,requested_by,due?,status:'open'|'in-progress'|'blocked'|'deferred'|'done'|'cancelled',blocked_on?,depends_on?,next_action,projects},description}; update-commitment {kind:'update-commitment',id,changes:[{field,value,label,citations}]}.. Episode sections use all headings Problem, Constraints, Alternatives considered, Reasoning and decision, Changes of understanding, Outcome, Unresolved questions. DigestItem is {label:'stated'|'observed'|'inferred',text,citations:string[]}; update commitment value is a string, string[], or null. Runner overwrites dates, sources, spanSources, operationId; do not emit runner fields. Unique localKey per create; no extra operation fields. Example no-op result: {digest:{projects:[],tags:[],sections:{...}},operations:[]}.`,
+    "Create episodes only for substantive problem-solving or decisions; routine exchanges do not create episodes. Still record supported requests and commitments, including from routine exchanges, and update them when supported. A request remains kind=request until explicit acceptance. Rejected approaches and changes of mind are first-class; label abandoned branches abandoned exploration, not adopted decisions. Record only supported current changes; never infer mental causes. A commitment creation description's label and citations must conservatively support every initialized field because initialization has one shared provenance item. New record citations must cite only NEW span entries, not prior context or existing records." ,
+    `Existing records (derived context, not new evidence): ${JSON.stringify(records)}`,
     `Include all headings: ${headings.join("; ")}. Cite only source IDs exactly as listed below (session-id/entry-id). Use labels stated for George's explicit claims, observed for transcript/tool evidence, inferred for clearly tentative interpretation. Preserve uncertainty. NEVER infer mental causes or diagnose. Distinguish explored/abandoned approaches from adopted decisions. The source-derived prior context is not new evidence.`,
     `Allowed source IDs: ${sessionPairs.join(", ")}. Each item must cite only IDs that support that item. The stated label applies only to George's own statements, not assistant choices or proposals.`,
     "Revise the existing digest together with the new entries. Return the complete replacement digest, not an append-only update. Existing digest is derived material, not fresh evidence. Context-only entries may aid interpretation but cannot support new claims.",
@@ -64,8 +67,10 @@ export function buildPrompt(span: PlannedSpan, context: TranscriptEntry[], prior
     "Prior context (interpretation only):", ...context.map(contextEntry), "New entries:", ...span.entries.map(contextEntry),
   ].join("\n");
 }
-function parseOutput(raw: string, span: PlannedSpan, prior: DigestFrontmatter | undefined): DigestOutput {
-  const value = JSON.parse(raw) as Partial<DigestOutput>;
+function parseOutput(raw: string, span: PlannedSpan, prior: DigestFrontmatter | undefined): { digest: DigestOutput; operations: unknown } {
+  const envelope = JSON.parse(raw) as any;
+  if (!envelope || typeof envelope !== "object" || Array.isArray(envelope) || Object.keys(envelope).sort().join(",") !== "digest,operations") throw new Error("Model returned invalid consolidation envelope");
+  const value = envelope.digest as Partial<DigestOutput>;
   if (!value || !Array.isArray(value.projects) || !Array.isArray(value.tags) || !value.sections || typeof value.sections !== "object") throw new Error("Model returned invalid digest JSON");
   const priorSources = prior?.sources.flatMap((source) => source.entryIds.map((entryId) => `${source.sessionId}/${entryId}`)) ?? [];
   const allowed = new Set([...priorSources, ...span.entries.map((entry) => `${entry.sessionId}/${entry.id}`)]);
@@ -80,7 +85,21 @@ function parseOutput(raw: string, span: PlannedSpan, prior: DigestFrontmatter | 
   }
   if (Object.keys(value.sections).some((heading) => !(headings as readonly string[]).includes(heading))) throw new Error("Model returned an unknown section");
   if (value.projects.some((project) => typeof project !== "string") || value.tags.some((tag) => typeof tag !== "string")) throw new Error("Model returned invalid projects or tags");
-  return { projects: value.projects as string[], tags: value.tags as string[], sections };
+  return { digest: { projects: value.projects as string[], tags: value.tags as string[], sections }, operations: envelope.operations };
+}
+function prepareOperations(raw: unknown, span: PlannedSpan, index: RecordIndex): RecordOperation[] {
+  if (!Array.isArray(raw)) throw new Error("Model returned invalid operations");
+  const spanSources: RecordSource[] = [...new Set(span.entries.map((entry) => entry.sessionId))].map((sessionId) => ({ sessionId, entryIds: span.entries.filter((entry) => entry.sessionId === sessionId).map((entry) => entry.id) }));
+  const operations = raw.map((operation: any, operationIndex): RecordOperation => {
+    if (!operation || typeof operation !== "object" || Array.isArray(operation) || !["create-episode", "update-episode", "create-commitment", "update-commitment"].includes(operation.kind)) throw new Error("Invalid operation schema");
+    const operationId = createHash("sha256").update(JSON.stringify([span.entries.map((entry) => entry.identity), operationIndex, operation.kind])).digest("hex").slice(0, 24);
+    const normalized: any = { ...operation, operationId, spanSources };
+    if (operation.kind === "create-episode") normalized.fields = { ...operation.fields, started: span.date, updated: span.date, sources: spanSources };
+    if (operation.kind === "update-episode" || operation.kind === "update-commitment") normalized.updated = span.date;
+    if (operation.kind === "create-commitment") normalized.fields = { ...operation.fields, created: span.date, updated: span.date };
+    return normalized as RecordOperation;
+  });
+  validateOperations(operations, index); return operations;
 }
 function renderItems(output: DigestOutput): string {
   return headings.map((heading) => {
@@ -105,6 +124,36 @@ function frontmatter(existing: DigestFrontmatter | undefined, date: string, inco
   return { type: "digest", date, derived: true, projects: [...new Set([...(existing?.projects ?? []), ...projects])], tags: [...new Set([...(existing?.tags ?? []), ...tags])], sources };
 }
 function renderDigest(metadata: DigestFrontmatter, body: string): string { return `---\n${stringify(metadata).trimEnd()}\n---\n\n${body.trim()}\n`; }
+function pendingPath(dir: string): string { return join(dir, ".pending-consolidation.json"); }
+function readDigestText(raw: string, path: string): { frontmatter: DigestFrontmatter; body: string } | undefined {
+  const match = raw.replaceAll("\r\n", "\n").match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
+  if (!match) throw new Error(`Invalid digest frontmatter: ${path}`);
+  let metadata: Partial<DigestFrontmatter> | null;
+  try { metadata = parse(match[1]) as Partial<DigestFrontmatter> | null; }
+  catch (error) { throw new Error(`Invalid digest YAML: ${path}`, { cause: error }); }
+  if (!metadata || metadata.type !== "digest" || typeof metadata.date !== "string" || metadata.derived !== true || !Array.isArray(metadata.projects) || metadata.projects.some((item) => typeof item !== "string") || !Array.isArray(metadata.tags) || metadata.tags.some((item) => typeof item !== "string") || !Array.isArray(metadata.sources) || metadata.sources.some((source) => !source || typeof source.sessionId !== "string" || !Array.isArray(source.entryIds) || source.entryIds.some((id) => typeof id !== "string"))) throw new Error(`Invalid digest metadata: ${path}`);
+  return { frontmatter: metadata as DigestFrontmatter, body: match[2] };
+}
+function validateBatch(batch: PendingBatch, dir: string): void {
+  if (!batch || batch.version !== 1 || !Array.isArray(batch.operations) || !Array.isArray(batch.digests) || !batch.state || batch.state.version !== 2) throw new Error("Invalid pending consolidation batch");
+  validateState(batch.state, "Invalid pending consolidation state");
+  const index = loadRecordIndex(dir);
+  for (const operation of batch.operations) { validateOperations([operation], index); const rendered = renderOperation(index, operation); if (rendered) advanceOperation(index, operation, rendered); }
+  for (const item of batch.digests) {
+    if (!item || typeof item.date !== "string" || !/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(item.date) || typeof item.content !== "string") throw new Error("Invalid pending digest target");
+    const existing = digestPath(dir, item.date);
+    if (existsSync(existing)) readDigest(existing);
+    try { const parsed = readDigestText(item.content, existing); if (!parsed || parsed.frontmatter.date !== item.date) throw new Error(); } catch { throw new Error(`Invalid pending digest content for ${item.date}`); }
+  }
+}
+function replayBatch(batch: PendingBatch, dir: string, options: ConsolidateOptions): void {
+  validateBatch(batch, dir);
+  let index = loadRecordIndex(dir); let outputIndex = 0;
+  for (const operation of batch.operations) { applyOperation(dir, operation, index, writeAtomic); options.afterRecordWrite?.(operation); options.afterOutputWrite?.("record", ++outputIndex); }
+  for (const digest of batch.digests) { writeAtomic(digestPath(dir, digest.date), digest.content); options.afterDigestWrite?.(digest.date); options.afterOutputWrite?.("digest", ++outputIndex); }
+  writeAtomic(join(dir, "state.json"), `${JSON.stringify(batch.state, null, 2)}\n`); options.afterOutputWrite?.("state", ++outputIndex);
+  rmSync(pendingPath(dir), { force: true });
+}
 function shellQuote(value: string): string { return `'${value.replaceAll("'", "'\\''")}'`; }
 function lockDiagnostic(path: string): string | undefined {
   if (!existsSync(path)) return undefined;
@@ -133,23 +182,30 @@ function acquireLock(dir: string): () => void {
   return () => rmSync(path, { force: true });
 }
 
-export interface ConsolidationStatus { lastSuccessfulRun: string | null; outstandingNewProcessable: number; deferredUnfinished: number; limitDeferred: number; lock?: string }
+export interface ConsolidationStatus { lastSuccessfulRun: string | null; outstandingNewProcessable: number; deferredUnfinished: number; limitDeferred: number; commitments?: Record<"open" | "in-progress" | "blocked" | "deferred", number>; lock?: string; pendingBatch?: string }
 function readLastSuccessfulRun(dir: string): string | null {
   let lastSuccessfulRun: string | null = null;
   const statePath = join(dir, "state.json");
   if (existsSync(statePath)) {
-    try { const state = JSON.parse(readFileSync(statePath, "utf8")) as ConsolidationState; if (state.version !== 1 || !Array.isArray(state.processedIdentities)) throw new Error(); lastSuccessfulRun = typeof state.lastSuccessfulRun === "string" ? state.lastSuccessfulRun : null; } catch { throw new Error(`Invalid state file: ${statePath}`); }
+    try { const state = JSON.parse(readFileSync(statePath, "utf8")) as ConsolidationState; validateState(state, `Invalid state file: ${statePath}`); lastSuccessfulRun = state.lastSuccessfulRun; } catch { throw new Error(`Invalid state file: ${statePath}`); }
   }
   return lastSuccessfulRun;
 }
-function statusFrom(plan: SpanPlan, lastSuccessfulRun: string | null): ConsolidationStatus {
-  return { lastSuccessfulRun, outstandingNewProcessable: plan.processableCount, deferredUnfinished: plan.deferredUnfinished.length, limitDeferred: plan.limitDeferredCount };
+function statusFrom(plan: SpanPlan, lastSuccessfulRun: string | null, dir?: string): ConsolidationStatus {
+  const status: ConsolidationStatus = { lastSuccessfulRun, outstandingNewProcessable: plan.processableCount, deferredUnfinished: plan.deferredUnfinished.length, limitDeferred: plan.limitDeferredCount };
+  if (dir) {
+    const counts = { open: 0, "in-progress": 0, blocked: 0, deferred: 0 };
+    for (const record of loadRecordIndex(dir).commitments.values()) if (record.metadata.status in counts) counts[record.metadata.status as keyof typeof counts]++;
+    status.commitments = counts;
+    if (existsSync(pendingPath(dir))) status.pendingBatch = pendingPath(dir);
+  }
+  return status;
 }
 export function getConsolidationStatus(options: Pick<ConsolidateOptions, "sessionsDir" | "memoryDir" | "maxEntries"> = {}): ConsolidationStatus {
   const dir = resolveMemoryDir(options.memoryDir);
   const snapshot = readTranscriptSnapshot(options.sessionsDir);
   const plan = planTranscriptSpans(snapshot, coverageFrom(dir, snapshot), options.maxEntries ?? 200);
-  const status = statusFrom(plan, readLastSuccessfulRun(dir));
+  const status = statusFrom(plan, readLastSuccessfulRun(dir), dir);
   const lock = lockDiagnostic(join(dir, ".consolidate.lock"));
   return lock ? { ...status, lock } : status;
 }
@@ -176,36 +232,40 @@ export async function consolidate(options: ConsolidateOptions = {}): Promise<{ p
   process.on("SIGTERM", handleSignal);
   try {
     mkdirSync(join(dir, "digests"), { recursive: true });
+    const pending = pendingPath(dir);
+    if (existsSync(pending)) {
+      let batch: PendingBatch;
+      try { batch = JSON.parse(readFileSync(pending, "utf8")) as PendingBatch; } catch (error) { throw new Error(`Invalid pending consolidation batch: ${pending}`, { cause: error }); }
+      replayBatch(batch, dir, options);
+    }
     const currentCoverage = coverageFrom(dir, snapshot);
     const plan = planTranscriptSpans(snapshot, currentCoverage, limit);
     const summary = planSummary(plan);
     if (!options.model && plan.spans.length) throw new Error("A model adapter is required when new entries are available");
+    const recordIndex = loadRecordIndex(dir);
     const prepared = [] as Array<{ date: string; output: DigestOutput; entries: TranscriptEntry[]; prior?: { frontmatter: DigestFrontmatter; body: string } }>;
-    // Validate all target digests before making any model call.
+    const operations: RecordOperation[] = [];
     const priors = new Map(plan.spans.map((span) => [span.date, readDigest(digestPath(dir, span.date))]));
-    for (const span of plan.spans) {
+    for (const span of [...plan.spans].sort((a, b) => a.date.localeCompare(b.date))) {
       const prior = priors.get(span.date);
-      const raw = await options.model!.consolidate(buildPrompt(span, plan.context, prior?.body ?? "", prior?.frontmatter.sources.flatMap((source) => source.entryIds.map((entryId) => `${source.sessionId}/${entryId}`)) ?? []));
-      const output = parseOutput(raw, span, prior?.frontmatter);
-      prepared.push({ date: span.date, output, entries: span.entries, ...(prior ? { prior } : {}) });
+      const recordContext = buildRecordContext(recordIndex, span.date);
+      const raw = await options.model!.consolidate(buildPrompt(span, plan.context, prior?.body ?? "", prior?.frontmatter.sources.flatMap((source) => source.entryIds.map((entryId) => `${source.sessionId}/${entryId}`)) ?? [], recordContext));
+      const envelope = parseOutput(raw, span, prior?.frontmatter);
+      const spanOperations = prepareOperations(envelope.operations, span, recordIndex);
+      for (const operation of spanOperations) { const rendered = renderOperation(recordIndex, operation); if (rendered) advanceOperation(recordIndex, operation, rendered); operations.push(operation); }
+      prepared.push({ date: span.date, output: envelope.digest, entries: span.entries, ...(prior ? { prior } : {}) });
     }
-    for (const item of prepared) {
-      const metadata = frontmatter(item.prior?.frontmatter, item.date, item.entries, item.output.projects, item.output.tags);
-      writeAtomic(digestPath(dir, item.date), renderDigest(metadata, renderItems(item.output)));
-      options.afterDigestWrite?.(item.date);
-    }
+    const digests = prepared.map((item) => ({ date: item.date, content: renderDigest(frontmatter(item.prior?.frontmatter, item.date, item.entries, item.output.projects, item.output.tags), renderItems(item.output)) }));
     const resultingCoverage = new Set(currentCoverage);
     for (const item of prepared) for (const entry of item.entries) resultingCoverage.add(entry.identity);
-    const state: ConsolidationState = { version: 1, processedIdentities: [...resultingCoverage], lastSuccessfulRun: new Date().toISOString() };
+    const state: ConsolidationState = { version: 2, processedIdentities: [...resultingCoverage], lastSuccessfulRun: new Date().toISOString() };
+    const batch: PendingBatch = { version: 1, operations, digests, state };
+    validateBatch(batch, dir);
+    writeAtomic(pending, `${JSON.stringify(batch, null, 2)}\n`);
+    replayBatch(batch, dir, options);
     const processedCount = prepared.reduce((count, item) => count + item.entries.length, 0);
     const remainingCount = plan.processableCount - processedCount;
-    const status: ConsolidationStatus = {
-      lastSuccessfulRun: state.lastSuccessfulRun,
-      outstandingNewProcessable: remainingCount,
-      deferredUnfinished: plan.deferredUnfinished.length,
-      limitDeferred: Math.max(0, remainingCount - limit),
-    };
-    writeAtomic(join(dir, "state.json"), `${JSON.stringify(state, null, 2)}\n`);
+    const status: ConsolidationStatus = { ...statusFrom({ ...plan, processableCount: remainingCount, limitDeferredCount: Math.max(0, remainingCount - limit) }, state.lastSuccessfulRun, dir) };
     return { plan: summary, status };
   } finally {
     process.removeListener("SIGINT", handleSignal);

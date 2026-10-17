@@ -100,6 +100,16 @@ test("strict operation schemas, required episode fields, statuses, targets, and 
   assert.throws(() => validateOperations([invalidCommitment], index), /Unknown commitment update target/);
 }));
 
+test("duplicate human record IDs are skipped as ambiguous with both paths warned", () => sandbox((dir) => {
+  const operation = episodeCreate();
+  applyOperation(dir, operation, loadRecordIndex(dir), writer); const first = [...loadRecordIndex(dir).episodes.values()][0]!.path; const second = join(dir, "episodes", "duplicate.md");
+  writeFileSync(second, readFileSync(first, "utf8"));
+  const warnings: string[] = []; const warn = console.warn; console.warn = (message) => warnings.push(String(message));
+  try { const index = loadRecordIndex(dir); assert.equal(index.episodes.has(createRecordId(spanSources, operation.localKey)), false); assert.equal(index.invalidIds.has(createRecordId(spanSources, operation.localKey)), true); } finally { console.warn = warn; }
+  assert.match(warnings.join("\n"), /episodes\/.*\.md.*episodes\/duplicate\.md/);
+  assert.match(readFileSync(first, "utf8"), /Cache decision/); assert.match(readFileSync(second, "utf8"), /Cache decision/);
+}));
+
 test("human YAML fields, comments, and body edits survive episode and commitment updates and reload", () => sandbox((dir) => {
   const ep = episodeCreate(); applyOperation(dir, ep, loadRecordIndex(dir), writer); const er = [...loadRecordIndex(dir).episodes.values()][0]!;
   let raw = readFileSync(er.path, "utf8").replace("title: Cache decision", "title: Cache decision\nhuman_custom: keep episode").replace("## Problem", "Human comment: episode\n\n## Problem"); writeFileSync(er.path, `${raw}\nManual body edit\n`);

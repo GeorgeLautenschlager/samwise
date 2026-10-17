@@ -221,7 +221,15 @@ export function loadRecordIndex(dir: string): RecordIndex {
       try {
         const raw = readFileSync(file, "utf8"); const split = splitRecord(raw); const metadata = split.doc.toJSON();
         if (kind === "episode" ? !isEpisode(metadata) : !isCommitment(metadata)) throw new Error("invalid record metadata");
-        (kind === "episode" ? index.episodes : index.commitments).set(metadata.id, { path: file, metadata: metadata as never, body: split.body, raw });
+        const records = kind === "episode" ? index.episodes : index.commitments;
+        const prior = records.get(metadata.id);
+        if (prior) {
+          records.delete(metadata.id); index.invalidIds.add(metadata.id);
+          console.warn(`Skipping ambiguous ${kind} ID ${metadata.id} in ${prior.path} and ${file}`);
+          continue;
+        }
+        if (index.invalidIds.has(metadata.id)) { console.warn(`Skipping ambiguous ${kind} ID ${metadata.id} in ${file}`); continue; }
+        records.set(metadata.id, { path: file, metadata: metadata as never, body: split.body, raw });
       } catch (error) {
         console.warn(`Skipping invalid ${kind} record ${file}: ${(error as Error).message}`); index.invalidIds.add(name.replace(/\.md$/, ""));
         try { const match = readFileSync(file, "utf8").match(/^---\r?\n([\s\S]*?)\r?\n---/); if (match) { const id = parseDocument(match[1]).get("id"); if (typeof id === "string") index.invalidIds.add(id); } } catch { /* Filename ID remains available. */ }

@@ -26,7 +26,7 @@ function validModel(onCall: (prompt: string) => void = () => {}): ModelAdapter {
     const unique = [...new Set(citations)];
     const sections: Record<string, unknown[]> = {};
     for (const heading of ["Work undertaken", "Outcomes", "Significant decisions", "Changes of plan and interruptions", "Carry-forward items"]) sections[heading] = [{ label: "observed", text: "Recorded activity", citations: unique.slice(-1) }];
-    return JSON.stringify({ projects: ["demo"], tags: ["work"], sections });
+    return JSON.stringify({ digest: { projects: ["demo"], tags: ["work"], sections }, operations: [] });
   } };
 }
 function metadata(path: string): any { return parse(readFileSync(path, "utf8").split("---\n")[1].split("\n---")[0]); }
@@ -46,6 +46,41 @@ test("same-day limited runs revise one digest and extend plain sources", async (
   assert.equal(calls.length, 2);
 }));
 
+test("one bounded multi-day run exposes created records to later spans and updates the same episode", async () => fixture(async (_root, sessions, memory) => {
+  writeSession(sessions, [row("u1", null, "user", "We rejected option B and chose option A", "2026-10-15T10:00:00Z"), row("a1", "u1", "assistant", "decision recorded", "2026-10-15T10:01:00Z", "stop"), row("u2", "a1", "user", "We changed the plan again", "2026-10-16T10:00:00Z"), row("a2", "u2", "assistant", "updated decision", "2026-10-16T10:01:00Z", "stop")]);
+  const ids: string[] = []; let calls = 0;
+  const model: ModelAdapter = { async consolidate(prompt) {
+    const refs = [...prompt.matchAll(/\"source\":\"([^\"]+)\"/g)].map((match) => match[1]);
+    const citation = refs.at(-1)!; const digest = { projects: [], tags: [], sections: Object.fromEntries(["Work undertaken", "Outcomes", "Significant decisions", "Changes of plan and interruptions", "Carry-forward items"].map((heading) => [heading, []])) };
+    if (calls++ === 0) return JSON.stringify({ digest, operations: [{ kind: "create-episode", localKey: "decision", fields: { title: "Choose approach", status: "open", projects: [], tags: [] }, sections: { "Alternatives considered": [{ label: "observed", text: "Option B rejected", citations: [citation] }], "Reasoning and decision": [{ label: "stated", text: "Option A chosen", citations: [citation] }] } }] });
+    const recordLine = prompt.split("\n").find((line) => line.startsWith("Existing records"))!;
+    const records = JSON.parse(recordLine.slice(recordLine.indexOf(": ") + 2)); ids.push(records.episodes[0].id);
+    return JSON.stringify({ digest, operations: [{ kind: "update-episode", id: ids[0], fields: { status: "resolved" }, sections: { "Changes of understanding": [{ label: "stated", text: "Plan revised", citations: [citation] }] } }] });
+  } };
+  await consolidate({ sessionsDir: sessions, memoryDir: memory, model });
+  assert.equal(calls, 2); assert.equal(ids.length, 1);
+  const files = readdirSync(join(memory, "episodes")); assert.equal(files.length, 1);
+  const record = readFileSync(join(memory, "episodes", files[0]), "utf8");
+  assert.match(record, /Option B rejected/); assert.match(record, /Plan revised/); assert.match(record, /2026-10-16/);
+  assert.equal(metadata(join(memory, "digests", "2026-10-15.md")).sources[0].entryIds.length, 2);
+  assert.equal(metadata(join(memory, "digests", "2026-10-16.md")).sources[0].entryIds.length, 2);
+}));
+
+test("selected spans prepare chronologically despite reverse filename dates", async () => fixture(async (_root, sessions, memory) => {
+  mkdirSync(sessions, { recursive: true });
+  for (const [file, date, sid, user, assistant] of [["a.jsonl", "2026-10-16", "late", "u2", "a2"], ["z.jsonl", "2026-10-15", "early", "u1", "a1"]]) writeFileSync(join(sessions, file), `${JSON.stringify({ type: "session", id: sid })}\n${JSON.stringify(row(user, null, "user", "decision", `${date}T10:00:00Z`))}\n${JSON.stringify(row(assistant, user, "assistant", "done", `${date}T10:01:00Z`, "stop"))}\n`);
+  let call = 0; const dates: string[] = [];
+  const model: ModelAdapter = { async consolidate(prompt) {
+    const date = call++ === 0 ? "2026-10-15" : "2026-10-16"; dates.push(date);
+    const citation = [...prompt.matchAll(/\"source\":\"([^\"]+)\"/g)].at(-1)![1];
+    const digest = { projects: [], tags: [], sections: Object.fromEntries(["Work undertaken", "Outcomes", "Significant decisions", "Changes of plan and interruptions", "Carry-forward items"].map((h) => [h, []])) };
+    return JSON.stringify({ digest, operations: [{ kind: "create-episode", localKey: `e-${date}`, fields: { title: "Decision", status: "open", projects: [], tags: [] }, sections: { Outcome: [{ label: "stated", text: date, citations: [citation] }] } }] });
+  } };
+  await consolidate({ sessionsDir: sessions, memoryDir: memory, model });
+  assert.deepEqual(dates, ["2026-10-15", "2026-10-16"]);
+  assert.equal(readdirSync(join(memory, "episodes")).length, 2);
+}));
+
 test("plain digest sources recover a crash before state and process only remaining entries", async () => fixture(async (_root, sessions, memory) => {
   writeSession(sessions, [row("u1", null, "user", "first"), row("a1", "u1", "assistant", "done", undefined, "stop"), row("u2", "a1", "user", "second"), row("a2", "u2", "assistant", "done", undefined, "stop")]);
   await assert.rejects(consolidate({ sessionsDir: sessions, memoryDir: memory, maxEntries: 2, model: validModel(), afterDigestWrite: () => { throw new Error("simulated crash"); } }), /simulated crash/);
@@ -57,7 +92,35 @@ test("plain digest sources recover a crash before state and process only remaini
   const front = metadata(join(memory, "digests", "2026-10-16.md"));
   assert.deepEqual(front.sources, [{ sessionId: "s-1", entryIds: ["u1", "a1", "u2", "a2"] }]);
   assert.deepEqual(Object.keys(JSON.parse(readFileSync(join(memory, "state.json"), "utf8"))).sort(), ["lastSuccessfulRun", "processedIdentities", "version"]);
-  assert.equal(JSON.parse(readFileSync(join(memory, "state.json"), "utf8")).version, 1);
+  assert.equal(JSON.parse(readFileSync(join(memory, "state.json"), "utf8")).version, 2);
+}));
+
+test("a state-boundary crash replays the prepared batch without another model call", async () => fixture(async (_root, sessions, memory) => {
+  writeSession(sessions, [row("u1", null, "user", "one"), row("a1", "u1", "assistant", "done", undefined, "stop")]);
+  let calls = 0;
+  await assert.rejects(consolidate({ sessionsDir: sessions, memoryDir: memory, model: validModel(() => calls++), afterOutputWrite: (kind) => { if (kind === "state") throw new Error("state boundary crash"); } }), /state boundary crash/);
+  assert.equal(existsSync(join(memory, ".pending-consolidation.json")), true);
+  await consolidate({ sessionsDir: sessions, memoryDir: memory, model: validModel(() => calls++) });
+  assert.equal(calls, 1); assert.equal(existsSync(join(memory, ".pending-consolidation.json")), false);
+  assert.equal(getConsolidationStatus({ sessionsDir: sessions, memoryDir: memory }).outstandingNewProcessable, 0);
+}));
+
+test("corrupt pending state is rejected before any output and journal remains intact", async () => fixture(async (_root, sessions, memory) => {
+  writeSession(sessions, [row("u1", null, "user", "one"), row("a1", "u1", "assistant", "done", undefined, "stop")]);
+  const state = join(memory, "state.json"), digest = join(memory, "digests", "2026-10-16.md"), journal = join(memory, ".pending-consolidation.json");
+  mkdirSync(join(memory, "digests"), { recursive: true }); writeFileSync(state, '{"version":1,"processedIdentities":[],"lastSuccessfulRun":null}\n');
+  writeFileSync(digest, "old digest bytes");
+  writeFileSync(journal, JSON.stringify({ version: 1, operations: [], digests: [], state: { version: 2, processedIdentities: [42], lastSuccessfulRun: null } }));
+  const beforeState = readFileSync(state), beforeDigest = readFileSync(digest), beforeJournal = readFileSync(journal);
+  await assert.rejects(consolidate({ sessionsDir: sessions, memoryDir: memory, model: validModel() }), /Invalid pending consolidation state/);
+  assert.deepEqual(readFileSync(state), beforeState); assert.deepEqual(readFileSync(digest), beforeDigest); assert.deepEqual(readFileSync(journal), beforeJournal);
+}));
+
+test("state version 1 remains readable and successful output upgrades it to version 2", async () => fixture(async (_root, sessions, memory) => {
+  writeSession(sessions, [row("u1", null, "user", "one"), row("a1", "u1", "assistant", "done", undefined, "stop")]);
+  mkdirSync(memory, { recursive: true }); writeFileSync(join(memory, "state.json"), '{"version":1,"processedIdentities":[],"lastSuccessfulRun":null}\n');
+  await consolidate({ sessionsDir: sessions, memoryDir: memory, model: validModel() });
+  assert.equal(JSON.parse(readFileSync(join(memory, "state.json"), "utf8")).version, 2);
 }));
 
 test("crash recovery deduplicates cloned entries after parent rewiring and dropped branch labels", async () => fixture(async (_root, sessions, memory) => {
@@ -86,9 +149,9 @@ test("multi-day partial commit recovers from digest-before-state interruption wi
   assert.equal(existsSync(join(memory, "digests", "2026-10-16.md")), false);
   const prompts: string[] = [];
   await consolidate({ sessionsDir: sessions, memoryDir: memory, model: validModel((prompt) => prompts.push(prompt)) });
-  assert.equal(prompts.length, 1);
-  assert.equal(prompts[0].includes('"source":"s-1/u2"'), true);
+  assert.equal(prompts.length, 0);
   assert.equal(existsSync(join(memory, "digests", "2026-10-16.md")), true);
+  assert.equal(existsSync(join(memory, "state.json")), true);
 }));
 
 test("prepares every date before writing and leaves earlier state untouched on model failure", async () => fixture(async (_root, sessions, memory) => {
@@ -297,7 +360,7 @@ test("rejects non-string project and tag metadata on a later date without changi
   const model: ModelAdapter = { async consolidate(prompt) {
     if (++calls === 1) return validModel().consolidate(prompt);
     const headings = ["Work undertaken", "Outcomes", "Significant decisions", "Changes of plan and interruptions", "Carry-forward items"];
-    return JSON.stringify({ projects: ["valid", 7], tags: ["valid", false], sections: Object.fromEntries(headings.map((heading) => [heading, [{ label: "observed", text: "ok", citations: ["s-1/u2"] }]])) });
+    return JSON.stringify({ digest: { projects: ["valid", 7], tags: ["valid", false], sections: Object.fromEntries(headings.map((heading) => [heading, [{ label: "observed", text: "ok", citations: ["s-1/u2"] }]])) }, operations: [] });
   } };
   await assert.rejects(consolidate({ sessionsDir: sessions, memoryDir: memory, model }), /invalid projects or tags/);
   assert.equal(calls, 2);
@@ -305,9 +368,25 @@ test("rejects non-string project and tag metadata on a later date without changi
   assert.equal(readdirSync(join(memory, "digests")).length, 0);
 }));
 
+test("rejects unknown record targets and forged span citations before any output writes", async () => fixture(async (_root, sessions, memory) => {
+  writeSession(sessions, [row("u1", null, "user", "question"), row("a1", "u1", "assistant", "answer", undefined, "stop")]);
+  const digest = { projects: [], tags: [], sections: Object.fromEntries(["Work undertaken", "Outcomes", "Significant decisions", "Changes of plan and interruptions", "Carry-forward items"].map((heading) => [heading, []])) };
+  for (const operation of [
+    { kind: "update-episode", id: "missing", fields: { status: "resolved" }, sections: { Outcome: [{ label: "stated", text: "claimed", citations: ["s-1/u1"] }] } },
+    { kind: "create-episode", localKey: "bad", fields: { title: "Unsupported", status: "open", projects: [], tags: [] }, sections: { Outcome: [{ label: "stated", text: "claimed", citations: ["outside/id"] }] } },
+  ]) {
+    const model: ModelAdapter = { async consolidate() { return JSON.stringify({ digest, operations: [operation] }); } };
+    await assert.rejects(consolidate({ sessionsDir: sessions, memoryDir: memory, model }));
+    assert.equal(existsSync(join(memory, ".pending-consolidation.json")), false);
+    assert.equal(existsSync(join(memory, "state.json")), false);
+    assert.equal(existsSync(join(memory, "digests", "2026-10-16.md")), false);
+    assert.equal(existsSync(join(memory, "episodes")), false);
+  }
+}));
+
 test("rejects model citations outside source entries before writing", async () => fixture(async (_root, sessions, memory) => {
   writeSession(sessions, [row("u1", null, "user", "question"), row("a1", "u1", "assistant", "answer", undefined, "stop")]);
-  const bad: ModelAdapter = { async consolidate() { return JSON.stringify({ projects: [], tags: [], sections: Object.fromEntries(["Work undertaken", "Outcomes", "Significant decisions", "Changes of plan and interruptions", "Carry-forward items"].map((name) => [name, [{ label: "made-up", text: "bad", citations: ["wrong/id"] }]])) }); } };
+  const bad: ModelAdapter = { async consolidate() { return JSON.stringify({ digest: { projects: [], tags: [], sections: Object.fromEntries(["Work undertaken", "Outcomes", "Significant decisions", "Changes of plan and interruptions", "Carry-forward items"].map((name) => [name, [{ label: "made-up", text: "bad", citations: ["wrong/id"] }]])) }, operations: [] }); } };
   await assert.rejects(consolidate({ sessionsDir: sessions, memoryDir: memory, model: bad }), /invalid item\/citation/);
   assert.equal(existsSync(join(memory, "state.json")), false);
 }));
