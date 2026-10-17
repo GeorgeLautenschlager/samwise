@@ -363,7 +363,7 @@ test("rejects non-string project and tag metadata on a later date without changi
     return JSON.stringify({ digest: { projects: ["valid", 7], tags: ["valid", false], sections: Object.fromEntries(headings.map((heading) => [heading, [{ label: "observed", text: "ok", citations: ["s-1/u2"] }]])) }, operations: [] });
   } };
   await assert.rejects(consolidate({ sessionsDir: sessions, memoryDir: memory, model }), /invalid projects or tags/);
-  assert.equal(calls, 2);
+  assert.equal(calls, 3);
   assert.equal(readFileSync(statePath, "utf8"), oldState);
   assert.equal(readdirSync(join(memory, "digests")).length, 0);
 }));

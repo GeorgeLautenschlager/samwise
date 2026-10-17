@@ -52,7 +52,20 @@ function parseItem(value: unknown, allowed: Set<string>): asserts value is Diges
 function allowedSources(spanSources: RecordSource[]): Set<string> { return new Set(spanSources.flatMap((source) => source.entryIds.map((id) => `${source.sessionId}/${id}`))); }
 function validateSources(value: unknown): asserts value is RecordSource[] { if (!sources(value) || value.length === 0 || value.some((source) => source.entryIds.length === 0)) throw new Error("Invalid operation sources"); }
 function validateSections(value: unknown, allowed: Set<string>): asserts value is Record<string, DigestItem[]> {
-  if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).some((heading) => !(headings as readonly string[]).includes(heading)) || Object.values(value).some((items) => !Array.isArray(items) || items.some((item) => { try { parseItem(item, allowed); return false; } catch { return true; } }))) throw new Error("Invalid episode sections");
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid episode sections shape");
+  for (const heading of Object.keys(value)) if (!(headings as readonly string[]).includes(heading)) throw new Error(`Invalid episode sections: unknown heading ${JSON.stringify(heading)}`);
+  for (const [heading, items] of Object.entries(value)) {
+    if (!Array.isArray(items)) throw new Error(`Invalid episode sections: ${heading} must be an array`);
+    items.forEach((item, itemIndex) => {
+      try { parseItem(item, allowed); }
+      catch {
+        const citations = (item as any)?.citations;
+        const citation = Array.isArray(citations) ? citations.find((entry) => typeof entry !== "string" || !allowed.has(entry)) : undefined;
+        if (citation !== undefined) throw new Error(`Invalid episode sections: invalid item/citation in ${heading} item ${itemIndex + 1}: unknown citation ${JSON.stringify(citation)}`);
+        throw new Error(`Invalid episode sections: invalid item/citation in ${heading} item ${itemIndex + 1}`);
+      }
+    });
+  }
 }
 function validateChanges(changes: CommitmentChange[], allowed: Set<string>): void {
   if (!Array.isArray(changes)) throw new Error("Invalid commitment changes");
