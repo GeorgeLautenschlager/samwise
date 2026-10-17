@@ -32,44 +32,35 @@ function manualEdit(path: string) {
   writeFileSync(path, `${raw}\nManual body edit\n`);
 }
 
-test("two-day episode and commitment batch recovers each output crash boundary without model replay", async () => {
-  for (let crashAt = 1; crashAt <= 7; crashAt++) {
+test("single-span rendered journal recovers every output crash boundary without a model replay", async () => {
+  for (let crashAt = 1; crashAt <= 4; crashAt++) {
     const { root, sessions, memory } = setup();
     try {
-      appendRows(sessions, [...rowPair(15, "We began work"), ...rowPair(16, "The work is complete")]);
-      let calls = 0; let episodeId = ""; let commitmentId = "";
+      appendRows(sessions, rowPair(15, "Work began"));
+      let calls = 0;
       const model: ModelAdapter = { async consolidate(prompt) {
         calls++;
         const citation = allowedId(prompt);
-        if (calls === 1) return JSON.stringify({ digest: emptyDigest(), operations: [
-          { kind: "create-episode", localKey: "e", fields: { title: "Work item", status: "open", projects: [], tags: [] }, sections: { Problem: [{ label: "observed", text: "Work started", citations: [citation] }] } },
-          { kind: "create-commitment", localKey: "c", fields: { title: "Review results", kind: "request", owner: "George", requested_by: "Samwise", status: "open", next_action: "Review", projects: [] }, description: { label: "observed", text: "Review requested", citations: [citation] } },
-        ] });
-        const records = existing(prompt); episodeId = records.episodes[0].id; commitmentId = records.commitments[0].id;
-        return JSON.stringify({ digest: emptyDigest(), operations: [
-          { kind: "update-episode", id: episodeId, fields: { status: "resolved" }, sections: { Outcome: [{ label: "observed", text: "Work completed", citations: [citation] }] } },
-          { kind: "update-commitment", id: commitmentId, changes: [{ field: "kind", value: "commitment", label: "observed", citations: [citation] }, { field: "status", value: "done", label: "observed", citations: [citation] }] },
-        ] });
+        return JSON.stringify({ digest: emptyDigest(), operations: [{
+          kind: "create-episode", localKey: "e", fields: { title: "Work item", status: "open", projects: [], tags: [] },
+          sections: { Problem: [{ label: "observed", text: "Work started", citations: [citation] }] },
+        }, {
+          kind: "create-commitment", localKey: "c", fields: { title: "Review results", kind: "request", owner: "George", requested_by: "Samwise", status: "open", next_action: "Review", projects: [] },
+          description: { label: "observed", text: "Review requested", citations: [citation] },
+        }] });
       } };
       await assert.rejects(consolidate({ sessionsDir: sessions, memoryDir: memory, model, afterOutputWrite: (_kind, index) => { if (index === crashAt) throw new Error(`crash ${crashAt}`); } }), new RegExp(`crash ${crashAt}`));
-      const existingCo = recordFiles(memory, "commitments")[0]; if (existingCo) manualEdit(existingCo);
       await consolidate({ sessionsDir: sessions, memoryDir: memory, model: { async consolidate() { throw new Error("unexpected model replay"); } } });
-      assert.equal(calls, 2, `crash boundary ${crashAt}`);
-      assert.equal(recordFiles(memory, "episodes").length, 1); assert.equal(recordFiles(memory, "commitments").length, 1);
-      assert.equal(recordFiles(memory, "digests").length, 2);
-      assert.equal(JSON.parse(readFileSync(join(memory, "state.json"), "utf8")).version, 2);
+      assert.equal(calls, 1);
+      assert.equal(recordFiles(memory, "episodes").length, 1);
+      assert.equal(recordFiles(memory, "commitments").length, 1);
+      assert.equal(recordFiles(memory, "digests").length, 1);
+      assert.equal(JSON.parse(readFileSync(join(memory, "state.json"), "utf8")).version, 1);
       assert.equal(getConsolidationStatus({ sessionsDir: sessions, memoryDir: memory }).outstandingNewProcessable, 0);
-      assert.equal(existsSync(join(memory, ".pending-consolidation.json")), false);
-      const episode = readFileSync(recordFiles(memory, "episodes")[0], "utf8"); const commitment = readFileSync(recordFiles(memory, "commitments")[0], "utf8");
-      assert.equal((episode.match(/<!-- samwise-operation:/g) ?? []).length, 2); assert.equal((commitment.match(/<!-- samwise-operation:/g) ?? []).length, 2);
-      assert.match(episode, /Work started/); assert.match(episode, /Work completed/); assert.match(episode, /s\/a15/); assert.match(episode, /s\/a16/);
-      assert.equal(metadata(recordFiles(memory, "commitments")[0]).status, "done");
-      assert.equal((commitment.match(/kind: commitment \(\*\*observed\*\*\)/g) ?? []).length, 1);
-      assert.equal((commitment.match(/status: done \(\*\*observed\*\*\)/g) ?? []).length, 1);
-      if (crashAt >= 2) { assert.match(commitment, /human_custom: keep me/); assert.match(commitment, /Human note/); assert.match(commitment, /Manual body edit/); }
-      const before = [readFileSync(recordFiles(memory, "episodes")[0], "utf8"), readFileSync(recordFiles(memory, "commitments")[0], "utf8")];
-      await consolidate({ sessionsDir: sessions, memoryDir: memory, model: { async consolidate() { throw new Error("stable rerun called model"); } } });
-      assert.deepEqual([readFileSync(recordFiles(memory, "episodes")[0], "utf8"), readFileSync(recordFiles(memory, "commitments")[0], "utf8")], before);
+      const episode = readFileSync(recordFiles(memory, "episodes")[0]!, "utf8");
+      const commitment = readFileSync(recordFiles(memory, "commitments")[0]!, "utf8");
+      assert.doesNotMatch(episode + commitment, /samwise-operation/);
+      assert.match(episode, /Work started/); assert.match(commitment, /created \(\*\*observed\*\*\)/);
     } finally { clean(root); }
   }
 });
@@ -109,6 +100,19 @@ test("routine request progresses through acceptance, blocked, and done across fo
     for (const token of ["s/a15", "s/a16", "s/a17", "s/a18"]) assert.ok(raw.includes(token));
     for (const marker of ["kind: commitment (**observed**)", "status: in-progress (**observed**)", "status: blocked (**observed**)", "status: done (**observed**)"]) assert.equal(raw.split(marker).length - 1, 1);
     assert.deepEqual(getConsolidationStatus({ sessionsDir: sessions, memoryDir: memory }).commitments, { open: 0, "in-progress": 0, blocked: 0, deferred: 0 });
+  } finally { clean(root); }
+});
+
+test("pending rendered output refuses a record edited after prepare", async () => {
+  const { root, sessions, memory } = setup();
+  try {
+    appendRows(sessions, rowPair(15, "Please review"));
+    const create: ModelAdapter = { async consolidate(prompt) { return JSON.stringify({ digest: emptyDigest(), operations: [{ kind: "create-commitment", localKey: "c", fields: { title: "Review", kind: "request", owner: "George", requested_by: "Samwise", status: "open", next_action: "Review", projects: [] }, description: { label: "stated", text: "Review requested", citations: [allowedId(prompt)] } }] }); } };
+    await consolidate({ sessionsDir: sessions, memoryDir: memory, model: create });
+    appendRows(sessions, rowPair(16, "Review is complete"));
+    const path = recordFiles(memory, "commitments")[0]!;
+    const update: ModelAdapter = { async consolidate(prompt) { const id = metadata(path).id; return JSON.stringify({ digest: emptyDigest(), operations: [{ kind: "update-commitment", id, changes: [{ field: "status", value: "done", label: "observed", citations: [allowedId(prompt)] }] }] }); } };
+    await assert.rejects(consolidate({ sessionsDir: sessions, memoryDir: memory, model: update, afterPrepare: () => appendFileSync(path, "\\nHuman edit after prepare\\n") }), /edited since prepare; re-run after review/);
   } finally { clean(root); }
 });
 

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import test from "node:test";
 import { execFileSync, spawn } from "node:child_process";
 import { consolidate, getConsolidationStatus, resolveMemoryDir, type ModelAdapter } from "../src/consolidator.ts";
@@ -31,6 +31,10 @@ function validModel(onCall: (prompt: string) => void = () => {}): ModelAdapter {
 }
 function metadata(path: string): any { return parse(readFileSync(path, "utf8").split("---\n")[1].split("\n---")[0]); }
 
+test("relative memory roots resolve absolutely before file routing", () => {
+  assert.equal(resolveMemoryDir("episodes"), resolve("episodes"));
+});
+
 test("same-day limited runs revise one digest and extend plain sources", async () => fixture(async (_root, sessions, memory) => {
   writeSession(sessions, [row("u1", null, "user", "first"), row("a1", "u1", "assistant", "done", undefined, "stop")]);
   const calls: string[] = [];
@@ -54,7 +58,7 @@ test("one bounded multi-day run exposes created records to later spans and updat
     const citation = refs.at(-1)!; const digest = { projects: [], tags: [], sections: Object.fromEntries(["Work undertaken", "Outcomes", "Significant decisions", "Changes of plan and interruptions", "Carry-forward items"].map((heading) => [heading, []])) };
     if (calls++ === 0) return JSON.stringify({ digest, operations: [{ kind: "create-episode", localKey: "decision", fields: { title: "Choose approach", status: "open", projects: [], tags: [] }, sections: { "Alternatives considered": [{ label: "observed", text: "Option B rejected", citations: [citation] }], "Reasoning and decision": [{ label: "stated", text: "Option A chosen", citations: [citation] }] } }] });
     const recordLine = prompt.split("\n").find((line) => line.startsWith("Existing records"))!;
-    const records = JSON.parse(recordLine.slice(recordLine.indexOf(": ") + 2)); ids.push(records.episodes[0].id);
+    const records = JSON.parse(recordLine.slice(recordLine.indexOf(": ") + 2)); assert.match(records.episodes[0].summary, /Option B rejected/); ids.push(records.episodes[0].id);
     return JSON.stringify({ digest, operations: [{ kind: "update-episode", id: ids[0], fields: { status: "resolved" }, sections: { "Changes of understanding": [{ label: "stated", text: "Plan revised", citations: [citation] }] } }] });
   } };
   await consolidate({ sessionsDir: sessions, memoryDir: memory, model });
@@ -64,6 +68,55 @@ test("one bounded multi-day run exposes created records to later spans and updat
   assert.match(record, /Option B rejected/); assert.match(record, /Plan revised/); assert.match(record, /2026-10-16/);
   assert.equal(metadata(join(memory, "digests", "2026-10-15.md")).sources[0].entryIds.length, 2);
   assert.equal(metadata(join(memory, "digests", "2026-10-16.md")).sources[0].entryIds.length, 2);
+}));
+
+test("record edits made during model call are merged from the fresh post-call snapshot", async () => fixture(async (_root, sessions, memory) => {
+  writeSession(sessions, [row("u1", null, "user", "Create record", "2026-10-15T10:00:00Z"), row("a1", "u1", "assistant", "done", "2026-10-15T10:01:00Z", "stop")]);
+  const digest = { projects: [], tags: [], sections: Object.fromEntries(["Work undertaken", "Outcomes", "Significant decisions", "Changes of plan and interruptions", "Carry-forward items"].map((heading) => [heading, []])) };
+  await consolidate({ sessionsDir: sessions, memoryDir: memory, model: { async consolidate(prompt) { const citation = [...prompt.matchAll(/\"source\":\"([^\"]+)\"/g)].at(-1)![1]; return JSON.stringify({ digest, operations: [{ kind: "create-episode", localKey: "e", fields: { title: "Call edit", status: "open", projects: [], tags: [] }, sections: { Problem: [{ label: "observed", text: "Initial", citations: [citation] }], Outcome: [{ label: "observed", text: "Untouched", citations: [citation] }] } }] }); } } });
+  const episodePath = join(memory, "episodes", readdirSync(join(memory, "episodes"))[0]!);
+  writeSession(sessions, [row("u1", null, "user", "Create record", "2026-10-15T10:00:00Z"), row("a1", "u1", "assistant", "done", "2026-10-15T10:01:00Z", "stop"), row("u2", "a1", "user", "Update record", "2026-10-16T10:00:00Z"), row("a2", "u2", "assistant", "done", "2026-10-16T10:01:00Z", "stop")]);
+  await consolidate({ sessionsDir: sessions, memoryDir: memory, model: { async consolidate(prompt) {
+    writeFileSync(episodePath, readFileSync(episodePath, "utf8").replace("title: Call edit", "title: Call edit\nhuman_custom: preserve").replace("Untouched", "Hand-edited untouched"));
+    const citation = [...prompt.matchAll(/\"source\":\"([^\"]+)\"/g)].at(-1)![1];
+    return JSON.stringify({ digest, operations: [{ kind: "update-episode", id: metadata(episodePath).id, sections: { Problem: [{ label: "observed", text: "Revised", citations: [citation] }] } }] });
+  } } });
+  const result = readFileSync(episodePath, "utf8"); assert.match(result, /human_custom: preserve/); assert.match(result, /Hand-edited untouched/); assert.match(result, /Revised/);
+}));
+
+test("model-time occupied episode creation path is not overwritten", async () => fixture(async (_root, sessions, memory) => {
+  writeSession(sessions, [row("u1", null, "user", "Create episode", "2026-10-15T10:00:00Z"), row("a1", "u1", "assistant", "done", "2026-10-15T10:01:00Z", "stop")]);
+  const occupied = join(memory, "episodes", "2026-10-15-call-edit.md"); let original = "human file";
+  const digest = { projects: [], tags: [], sections: Object.fromEntries(["Work undertaken", "Outcomes", "Significant decisions", "Changes of plan and interruptions", "Carry-forward items"].map((heading) => [heading, []])) };
+  await consolidate({ sessionsDir: sessions, memoryDir: memory, model: { async consolidate(prompt) {
+    mkdirSync(join(memory, "episodes"), { recursive: true }); writeFileSync(occupied, original);
+    const citation = [...prompt.matchAll(/\"source\":\"([^\"]+)\"/g)].at(-1)![1];
+    return JSON.stringify({ digest, operations: [{ kind: "create-episode", localKey: "e", fields: { title: "Call Edit", status: "open", projects: [], tags: [] }, sections: { Outcome: [{ label: "observed", text: "Created", citations: [citation] }] } }] });
+  } } });
+  assert.equal(readFileSync(occupied, "utf8"), original); assert.equal(existsSync(join(memory, "episodes", "2026-10-15-call-edit-2.md")), true);
+}));
+
+test("later-run earlier-dated cited evidence moves episode start but keeps creation filename date", async () => fixture(async (_root, sessions, memory) => {
+  writeSession(sessions, [row("u1", null, "user", "Decide", "2026-10-16T10:00:00Z"), row("a1", "u1", "assistant", "done", "2026-10-16T10:01:00Z", "stop")]);
+  const digest = { projects: [], tags: [], sections: Object.fromEntries(["Work undertaken", "Outcomes", "Significant decisions", "Changes of plan and interruptions", "Carry-forward items"].map((heading) => [heading, []])) };
+  await consolidate({ sessionsDir: sessions, memoryDir: memory, model: { async consolidate(prompt) { const citation = [...prompt.matchAll(/\"source\":\"([^\"]+)\"/g)].at(-1)![1]; return JSON.stringify({ digest, operations: [{ kind: "create-episode", localKey: "e", fields: { title: "Decision", status: "open", projects: [], tags: [] }, sections: { Outcome: [{ label: "observed", text: "Decision", citations: [citation] }] } }] }); } } });
+  const original = readdirSync(join(memory, "episodes"))[0]!; assert.match(original, /^2026-10-16-/);
+  writeSession(sessions, [row("u1", null, "user", "Decide", "2026-10-16T10:00:00Z"), row("a1", "u1", "assistant", "done", "2026-10-16T10:01:00Z", "stop"), row("u2", "a1", "user", "Earlier evidence", "2026-10-15T09:00:00Z"), row("a2", "u2", "assistant", "done", "2026-10-15T09:01:00Z", "stop")]);
+  await consolidate({ sessionsDir: sessions, memoryDir: memory, model: { async consolidate(prompt) { const citation = [...prompt.matchAll(/\"source\":\"([^\"]+)\"/g)].at(-1)![1]; return JSON.stringify({ digest, operations: [{ kind: "update-episode", id: metadata(join(memory, "episodes", original)).id, sections: { Outcome: [{ label: "observed", text: "Earlier dated support", citations: [citation] }] } }] }); } } });
+  assert.equal(readdirSync(join(memory, "episodes"))[0], original); assert.equal(metadata(join(memory, "episodes", original)).started, "2026-10-15");
+}));
+
+test("episode prompt includes hand-edited current text and revisions preserve untargeted sections", async () => fixture(async (_root, sessions, memory) => {
+  writeSession(sessions, [row("u1", null, "user", "Choose and document", "2026-10-15T10:00:00Z"), row("a1", "u1", "assistant", "done", "2026-10-15T10:01:00Z", "stop")]);
+  const digest = { projects: [], tags: [], sections: Object.fromEntries(["Work undertaken", "Outcomes", "Significant decisions", "Changes of plan and interruptions", "Carry-forward items"].map((heading) => [heading, []])) };
+  await consolidate({ sessionsDir: sessions, memoryDir: memory, model: { async consolidate(prompt) { const citation = [...prompt.matchAll(/\"source\":\"([^\"]+)\"/g)].at(-1)![1]; return JSON.stringify({ digest, operations: [{ kind: "create-episode", localKey: "e", fields: { title: "Decision", status: "open", projects: [], tags: [] }, sections: { Problem: [{ label: "observed", text: "Original problem", citations: [citation] }], Outcome: [{ label: "observed", text: "Untouched conclusion", citations: [citation] }] } }] }); } } });
+  const path = join(memory, "episodes", readdirSync(join(memory, "episodes"))[0]!);
+  const before = readFileSync(path, "utf8"); writeFileSync(path, before.replace("Original problem", "Hand-edited problem"));
+  writeSession(sessions, [row("u1", null, "user", "Choose and document", "2026-10-15T10:00:00Z"), row("a1", "u1", "assistant", "done", "2026-10-15T10:01:00Z", "stop"), row("u2", "a1", "user", "Reconsider", "2026-10-16T10:00:00Z"), row("a2", "u2", "assistant", "done", "2026-10-16T10:01:00Z", "stop")]);
+  let sawEdit = false;
+  await consolidate({ sessionsDir: sessions, memoryDir: memory, model: { async consolidate(prompt) { sawEdit = prompt.includes("Hand-edited problem"); const citation = [...prompt.matchAll(/\"source\":\"([^\"]+)\"/g)].at(-1)![1]; return JSON.stringify({ digest, operations: [{ kind: "update-episode", id: metadata(path).id, sections: { Problem: [{ label: "observed", text: "Revised problem", citations: [citation] }] } }] }); } } });
+  const after = readFileSync(path, "utf8"); assert.equal(sawEdit, true); assert.match(after, /Revised problem/); assert.match(after, /Untouched conclusion/);
+  assert.equal(after.match(/Untouched conclusion/g)?.length, 1);
 }));
 
 test("selected spans prepare chronologically despite reverse filename dates", async () => fixture(async (_root, sessions, memory) => {
@@ -92,7 +145,7 @@ test("plain digest sources recover a crash before state and process only remaini
   const front = metadata(join(memory, "digests", "2026-10-16.md"));
   assert.deepEqual(front.sources, [{ sessionId: "s-1", entryIds: ["u1", "a1", "u2", "a2"] }]);
   assert.deepEqual(Object.keys(JSON.parse(readFileSync(join(memory, "state.json"), "utf8"))).sort(), ["lastSuccessfulRun", "processedIdentities", "version"]);
-  assert.equal(JSON.parse(readFileSync(join(memory, "state.json"), "utf8")).version, 2);
+  assert.equal(JSON.parse(readFileSync(join(memory, "state.json"), "utf8")).version, 1);
 }));
 
 test("a state-boundary crash replays the prepared batch without another model call", async () => fixture(async (_root, sessions, memory) => {
@@ -112,15 +165,15 @@ test("corrupt pending state is rejected before any output and journal remains in
   writeFileSync(digest, "old digest bytes");
   writeFileSync(journal, JSON.stringify({ version: 1, operations: [], digests: [], state: { version: 2, processedIdentities: [42], lastSuccessfulRun: null } }));
   const beforeState = readFileSync(state), beforeDigest = readFileSync(digest), beforeJournal = readFileSync(journal);
-  await assert.rejects(consolidate({ sessionsDir: sessions, memoryDir: memory, model: validModel() }), /Invalid pending consolidation state/);
+  await assert.rejects(consolidate({ sessionsDir: sessions, memoryDir: memory, model: validModel() }), /Unsupported old operations-format pending journal/);
   assert.deepEqual(readFileSync(state), beforeState); assert.deepEqual(readFileSync(digest), beforeDigest); assert.deepEqual(readFileSync(journal), beforeJournal);
 }));
 
-test("state version 1 remains readable and successful output upgrades it to version 2", async () => fixture(async (_root, sessions, memory) => {
+test("state version 1 remains readable and remains version 1 on write", async () => fixture(async (_root, sessions, memory) => {
   writeSession(sessions, [row("u1", null, "user", "one"), row("a1", "u1", "assistant", "done", undefined, "stop")]);
   mkdirSync(memory, { recursive: true }); writeFileSync(join(memory, "state.json"), '{"version":1,"processedIdentities":[],"lastSuccessfulRun":null}\n');
   await consolidate({ sessionsDir: sessions, memoryDir: memory, model: validModel() });
-  assert.equal(JSON.parse(readFileSync(join(memory, "state.json"), "utf8")).version, 2);
+  assert.equal(JSON.parse(readFileSync(join(memory, "state.json"), "utf8")).version, 1);
 }));
 
 test("crash recovery deduplicates cloned entries after parent rewiring and dropped branch labels", async () => fixture(async (_root, sessions, memory) => {
@@ -140,7 +193,7 @@ test("crash recovery deduplicates cloned entries after parent rewiring and dropp
   assert.deepEqual(metadata(join(memory, "digests", "2026-10-16.md")).sources, [{ sessionId: "original", entryIds: ["u1", "a1", "u2", "a2"] }]);
 }));
 
-test("multi-day partial commit recovers from digest-before-state interruption without skipping dates", async () => fixture(async (_root, sessions, memory) => {
+test("multi-day span journals recover an interrupted write before state", async () => fixture(async (_root, sessions, memory) => {
   writeSession(sessions, [row("u1", null, "user", "one", "2026-10-15T10:00:00Z"), row("a1", "u1", "assistant", "done", "2026-10-15T10:01:00Z", "stop"), row("u2", "a1", "user", "two", "2026-10-16T10:00:00Z"), row("a2", "u2", "assistant", "done", "2026-10-16T10:01:00Z", "stop")]);
   let written = 0;
   await assert.rejects(consolidate({ sessionsDir: sessions, memoryDir: memory, model: validModel(), afterDigestWrite: () => { if (++written === 1) throw new Error("interrupted between dates"); } }), /interrupted between dates/);
@@ -149,12 +202,13 @@ test("multi-day partial commit recovers from digest-before-state interruption wi
   assert.equal(existsSync(join(memory, "digests", "2026-10-16.md")), false);
   const prompts: string[] = [];
   await consolidate({ sessionsDir: sessions, memoryDir: memory, model: validModel((prompt) => prompts.push(prompt)) });
-  assert.equal(prompts.length, 0);
+  assert.equal(prompts.length, 1);
+  assert.match(prompts[0], /"source":"s-1\/u2"/);
   assert.equal(existsSync(join(memory, "digests", "2026-10-16.md")), true);
   assert.equal(existsSync(join(memory, "state.json")), true);
 }));
 
-test("prepares every date before writing and leaves earlier state untouched on model failure", async () => fixture(async (_root, sessions, memory) => {
+test("later span model failure retains the preceding span commit", async () => fixture(async (_root, sessions, memory) => {
   writeSession(sessions, [row("u1", null, "user", "one", "2026-10-15T10:00:00Z"), row("a1", "u1", "assistant", "done", "2026-10-15T10:01:00Z", "stop"), row("u2", "a1", "user", "two", "2026-10-16T10:00:00Z"), row("a2", "u2", "assistant", "done", "2026-10-16T10:01:00Z", "stop")]);
   mkdirSync(memory, { recursive: true });
   const statePath = join(memory, "state.json");
@@ -164,8 +218,12 @@ test("prepares every date before writing and leaves earlier state untouched on m
   const model: ModelAdapter = { async consolidate(prompt) { calls++; if (calls === 2) throw new Error("model failed"); return validModel().consolidate(prompt); } };
   await assert.rejects(consolidate({ sessionsDir: sessions, memoryDir: memory, model }), /model failed/);
   assert.equal(readdirSync(memory).includes("digests"), true);
-  assert.equal(readdirSync(join(memory, "digests")).length, 0);
-  assert.equal(readFileSync(statePath, "utf8"), oldState);
+  assert.equal(readdirSync(join(memory, "digests")).length, 1);
+  const committedState = JSON.parse(readFileSync(statePath, "utf8"));
+  assert.notEqual(readFileSync(statePath, "utf8"), oldState);
+  assert.equal(committedState.processedIdentities.length, 2);
+  assert.deepEqual(metadata(join(memory, "digests", "2026-10-15.md")).sources, [{ sessionId: "s-1", entryIds: ["u1", "a1"] }]);
+  assert.equal(existsSync(join(memory, "digests", "2026-10-16.md")), false);
 }));
 
 test("dry-run does not create store, invoke model, or write a lock", async () => fixture(async (_root, sessions, memory) => {
@@ -350,7 +408,7 @@ test("CLI status invocation reports JSON and honors directory flags", () => fixt
   assert.equal(JSON.parse(output).outstandingNewProcessable, 2);
 }));
 
-test("rejects non-string project and tag metadata on a later date without changing state", async () => fixture(async (_root, sessions, memory) => {
+test("rejects non-string project and tag metadata without undoing prior span commits", async () => fixture(async (_root, sessions, memory) => {
   writeSession(sessions, [row("u1", null, "user", "one", "2026-10-15T10:00:00Z"), row("a1", "u1", "assistant", "done", "2026-10-15T10:01:00Z", "stop"), row("u2", "a1", "user", "two", "2026-10-16T10:00:00Z"), row("a2", "u2", "assistant", "done", "2026-10-16T10:01:00Z", "stop")]);
   mkdirSync(memory, { recursive: true });
   const statePath = join(memory, "state.json");
@@ -364,8 +422,8 @@ test("rejects non-string project and tag metadata on a later date without changi
   } };
   await assert.rejects(consolidate({ sessionsDir: sessions, memoryDir: memory, model }), /invalid projects or tags/);
   assert.equal(calls, 3);
-  assert.equal(readFileSync(statePath, "utf8"), oldState);
-  assert.equal(readdirSync(join(memory, "digests")).length, 0);
+  assert.notEqual(readFileSync(statePath, "utf8"), oldState);
+  assert.equal(readdirSync(join(memory, "digests")).length, 1);
 }));
 
 test("rejects unknown record targets and forged span citations before any output writes", async () => fixture(async (_root, sessions, memory) => {

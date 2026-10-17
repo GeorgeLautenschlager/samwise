@@ -1,6 +1,5 @@
-import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
-import { isAbsolute, join } from "node:path";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { join } from "node:path";
 import { parseDocument } from "yaml";
 
 export interface DigestItem { label: "stated" | "observed" | "inferred"; text: string; citations: string[] }
@@ -18,20 +17,21 @@ export interface Commitment {
 export type RecordMetadata = Episode | Commitment;
 export type EpisodeFields = Pick<Episode, "title" | "status" | "started" | "updated" | "projects" | "tags" | "sources">;
 export type CommitmentFields = Omit<Commitment, "type" | "id" | "derived" | "sources">;
-export interface EpisodeCreate { kind: "create-episode"; operationId: string; spanSources: RecordSource[]; localKey: string; fields: EpisodeFields; sections: Record<string, DigestItem[]> }
-export interface EpisodeUpdate { kind: "update-episode"; operationId: string; spanSources: RecordSource[]; id: string; updated: string; fields?: Partial<Pick<Episode, "title" | "status" | "projects" | "tags">>; sections?: Record<string, DigestItem[]> }
+export interface EpisodeCreate { kind: "create-episode"; recordId: string; filenameDate: string; spanSources: RecordSource[]; localKey: string; fields: EpisodeFields; sections: Record<string, DigestItem[]> }
+export interface EpisodeUpdate { kind: "update-episode"; spanSources: RecordSource[]; earliestCitedDate: string; id: string; updated: string; fields?: Partial<Pick<Episode, "title" | "status" | "projects" | "tags">>; sections?: Record<string, DigestItem[]> }
 export interface CommitmentChange { field: string; value: string | string[] | null; label: DigestItem["label"]; citations: string[] }
-export interface CommitmentCreate { kind: "create-commitment"; operationId: string; spanSources: RecordSource[]; localKey: string; fields: CommitmentFields; description: DigestItem }
-export interface CommitmentUpdate { kind: "update-commitment"; operationId: string; spanSources: RecordSource[]; id: string; updated: string; changes: CommitmentChange[] }
+export interface CommitmentCreate { kind: "create-commitment"; recordId: string; spanSources: RecordSource[]; localKey: string; fields: CommitmentFields; description: DigestItem }
+export interface CommitmentUpdate { kind: "update-commitment"; spanSources: RecordSource[]; id: string; updated: string; changes: CommitmentChange[] }
 export type RecordOperation = EpisodeCreate | EpisodeUpdate | CommitmentCreate | CommitmentUpdate;
 type Indexed<T extends RecordMetadata> = { path: string; metadata: T; body: string; raw: string };
 export interface RecordIndex { episodes: Map<string, Indexed<Episode>>; commitments: Map<string, Indexed<Commitment>>; invalidIds: Set<string>; occupiedPaths: Set<string> }
-export interface RecordContext { commitments: Array<Pick<Commitment, "id" | "title" | "status" | "owner" | "next_action">>; episodes: Array<{ id: string; title: string; summary: string }> }
+export interface RecordContext { commitments: Array<Pick<Commitment, "id" | "title" | "status" | "owner" | "next_action">>; episodes: Array<{ id: string; title: string; summary: string; currentText: string }> }
 const episodeStatuses = ["open", "resolved", "abandoned"] as const;
 const commitmentStatuses = ["open", "in-progress", "blocked", "deferred", "done", "cancelled"] as const;
 const terminalCommitments = new Set(["done", "cancelled"]);
 const headings = ["Problem", "Constraints", "Alternatives considered", "Reasoning and decision", "Changes of understanding", "Outcome", "Unresolved questions"] as const;
 const semanticCommitmentFields = ["title", "kind", "owner", "requested_by", "due", "status", "blocked_on", "depends_on", "next_action", "projects"] as const;
+const warnedRecords = new Set<string>(); export function resetRecordWarnings(): void { warnedRecords.clear(); } function warnRecordOnce(key: string, message: string): void { if (!warnedRecords.has(key)) { warnedRecords.add(key); console.warn(message); } }
 function exactKeys(value: any, allowed: readonly string[]): boolean { return !!value && typeof value === "object" && !Array.isArray(value) && Object.keys(value).every((key) => allowed.includes(key)); }
 function validDate(value: unknown): value is string { if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false; const parsed = new Date(`${value}T00:00:00Z`); return !Number.isNaN(parsed.valueOf()) && parsed.toISOString().slice(0, 10) === value; }
 function strings(value: unknown): value is string[] { return Array.isArray(value) && value.every((item) => typeof item === "string"); }
@@ -46,8 +46,8 @@ function splitRecord(raw: string): { doc: ReturnType<typeof parseDocument>; body
   if (doc.errors.length) throw new Error(`invalid YAML: ${doc.errors.map((error) => error.message).join("; ")}`);
   return { doc, body: match[4] };
 }
-export function createRecordId(spanSources: RecordSource[], key: string): string { return createHash("sha256").update(JSON.stringify([spanSources, key])).digest("hex").slice(0, 20); }
-function slug(title: string, id: string): string { return `${title.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 50) || "episode"}-${id}`; }
+function slug(title: string): string { return title.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 50) || "episode"; }
+function episodeTarget(index: RecordIndex, date: string, fields: Pick<Episode, "title">): string { const base = `${date}-${slug(fields.title)}`; let suffix = 1, target = `episodes/${base}.md`; while (index.occupiedPaths.has(target)) target = `episodes/${base}-${++suffix}.md`; return target; }
 function parseItem(value: unknown, allowed: Set<string>): asserts value is DigestItem { if (!digestItem(value) || value.citations.some((citation) => !allowed.has(citation))) throw new Error("Invalid item or citation outside the new span"); }
 function allowedSources(spanSources: RecordSource[]): Set<string> { return new Set(spanSources.flatMap((source) => source.entryIds.map((id) => `${source.sessionId}/${id}`))); }
 function validateSources(value: unknown): asserts value is RecordSource[] { if (!sources(value) || value.length === 0 || value.some((source) => source.entryIds.length === 0)) throw new Error("Invalid operation sources"); }
@@ -90,17 +90,15 @@ function validCommitmentCreateFields(f: any): boolean {
 }
 export function validateOperations(operations: unknown, index: RecordIndex): asserts operations is RecordOperation[] {
   if (!Array.isArray(operations)) throw new Error("Operations must be an array");
-  const virtualEpisodes = new Set(index.episodes.keys()); const virtualCommitments = new Set(index.commitments.keys());
-  const episodeCreateMarkers = new Map([...index.episodes].map(([id, record]) => [id, record.body.match(/<!-- samwise-operation:([^\n]+) -->/)?.[1]]));
-  const commitmentCreateMarkers = new Map([...index.commitments].map(([id, record]) => [id, record.body.match(/<!-- samwise-operation:([^\n]+) -->/)?.[1]]));
+  const virtualEpisodes = new Set(index.episodes.keys()), virtualCommitments = new Set(index.commitments.keys()), episodeKeys = new Set<string>(), commitmentKeys = new Set<string>();
   for (const raw of operations) {
     const op = raw as RecordOperation;
-    if (!op || typeof op.operationId !== "string" || !op.operationId || !Array.isArray(op.spanSources)) throw new Error("Invalid operation schema");
+    if (!op || !Array.isArray(op.spanSources) || (op.kind === "create-episode" && (typeof op.filenameDate !== "string" || !validDate(op.filenameDate))) || (op.kind === "update-episode" && !validDate(op.earliestCitedDate)) || ((op.kind === "create-episode" || op.kind === "create-commitment") && (typeof op.recordId !== "string" || !op.recordId))) throw new Error("Invalid operation schema");
     const schemas: Record<string, { required: string[]; allowed: string[] }> = {
-      "create-episode": { required: ["kind", "operationId", "spanSources", "localKey", "fields", "sections"], allowed: ["kind", "operationId", "spanSources", "localKey", "fields", "sections"] },
-      "update-episode": { required: ["kind", "operationId", "spanSources", "id", "updated"], allowed: ["kind", "operationId", "spanSources", "id", "updated", "fields", "sections"] },
-      "create-commitment": { required: ["kind", "operationId", "spanSources", "localKey", "fields", "description"], allowed: ["kind", "operationId", "spanSources", "localKey", "fields", "description"] },
-      "update-commitment": { required: ["kind", "operationId", "spanSources", "id", "updated", "changes"], allowed: ["kind", "operationId", "spanSources", "id", "updated", "changes"] },
+      "create-episode": { required: ["kind", "recordId", "filenameDate", "spanSources", "localKey", "fields", "sections"], allowed: ["kind", "recordId", "filenameDate", "spanSources", "localKey", "fields", "sections"] },
+      "update-episode": { required: ["kind", "spanSources", "earliestCitedDate", "id", "updated"], allowed: ["kind", "spanSources", "earliestCitedDate", "id", "updated", "fields", "sections"] },
+      "create-commitment": { required: ["kind", "recordId", "spanSources", "localKey", "fields", "description"], allowed: ["kind", "recordId", "spanSources", "localKey", "fields", "description"] },
+      "update-commitment": { required: ["kind", "spanSources", "id", "updated", "changes"], allowed: ["kind", "spanSources", "id", "updated", "changes"] },
     };
     const schema = schemas[op.kind];
     if (!schema || !schema.required.every((key) => key in (op as any)) || !exactKeys(op, schema.allowed)) throw new Error("Invalid operation schema");
@@ -110,10 +108,10 @@ export function validateOperations(operations: unknown, index: RecordIndex): ass
       validateSections(op.sections, allowed);
       if (!Object.values(op.sections).some((items) => items.length)) throw new Error("Episode creation requires a cited section item");
       if (op.fields.sources.some((source) => source.entryIds.some((id) => !allowed.has(`${source.sessionId}/${id}`)))) throw new Error("Episode source outside new span");
-      const id = createRecordId(op.spanSources, op.localKey); const target = `episodes/${op.fields.started}-${slug(op.fields.title, id)}.md`;
-      if (virtualEpisodes.has(id) && episodeCreateMarkers.get(id) !== op.operationId) throw new Error(`Episode create ID already exists with a different operation: ${id}`);
+      const id = op.recordId; const target = episodeTarget(index, op.filenameDate, op.fields);
+      if (virtualEpisodes.has(id) || episodeKeys.has(op.localKey)) throw new Error(`Duplicate episode localKey: ${op.localKey}`);
       if (index.occupiedPaths.has(target) && !index.episodes.has(id)) throw new Error(`Episode create target already exists: ${target}`);
-      virtualEpisodes.add(id); episodeCreateMarkers.set(id, op.operationId);
+      virtualEpisodes.add(id); episodeKeys.add(op.localKey);
     } else if (op.kind === "update-episode") {
       if (typeof op.id !== "string" || !virtualEpisodes.has(op.id) || !validDate(op.updated)) throw new Error(`Unknown or invalid episode update target: ${op.id}`);
       if (op.fields && !validateEpisodeFields(op.fields, ["title", "status", "projects", "tags"])) throw new Error("Invalid episode fields");
@@ -121,10 +119,10 @@ export function validateOperations(operations: unknown, index: RecordIndex): ass
       if (op.fields && Object.keys(op.fields).length && !(op.sections && Object.values(op.sections).some((items) => items.length))) throw new Error("Episode field updates require a cited section item");
     } else if (op.kind === "create-commitment") {
       if (typeof op.localKey !== "string" || !op.localKey || !validCommitmentCreateFields(op.fields)) throw new Error("Invalid commitment creation");
-      parseItem(op.description, allowed); const id = createRecordId(op.spanSources, op.localKey); const target = `commitments/${id}.md`;
-      if (virtualCommitments.has(id) && commitmentCreateMarkers.get(id) !== op.operationId) throw new Error(`Commitment create ID already exists with a different operation: ${id}`);
+      parseItem(op.description, allowed); const id = op.recordId; const target = `commitments/${id}.md`;
+      if (virtualCommitments.has(id) || commitmentKeys.has(op.localKey)) throw new Error(`Duplicate commitment localKey: ${op.localKey}`);
       if (index.occupiedPaths.has(target) && !index.commitments.has(id)) throw new Error(`Commitment create target already exists: ${target}`);
-      virtualCommitments.add(id); commitmentCreateMarkers.set(id, op.operationId);
+      virtualCommitments.add(id); commitmentKeys.add(op.localKey);
     } else if (op.kind === "update-commitment") {
       if (typeof op.id !== "string" || (!virtualCommitments.has(op.id) && !index.invalidIds.has(op.id))) throw new Error(`Unknown commitment update target: ${op.id}`);
       if (index.invalidIds.has(op.id)) throw new Error(`Cannot update invalid record ${op.id}`);
@@ -139,7 +137,27 @@ function mergeSources(oldSources: RecordSource[], incoming: RecordSource[]): Rec
   return [...merged].map(([sessionId, entryIds]) => ({ sessionId, entryIds }));
 }
 function dateAppend(body: string, date: string, text: string): string { return `${body}${body.length && !body.endsWith("\n") ? "\n" : ""}${body.length ? "\n" : ""}### ${date}\n${text}\n`; }
-function renderEpisodeSections(sections: Record<string, DigestItem[]>): string { return headings.map((heading) => `## ${heading}\n${(sections[heading] ?? []).map((item) => `- **${item.label}** ${item.text} — [${item.citations.join(", ")}]`).join("\n")}`).join("\n\n"); }
+function renderEpisodeSections(sections: Record<string, DigestItem[]>, date: string): string { return headings.filter((heading) => (sections[heading] ?? []).length > 0).map((heading) => `## ${heading}\n${appendOnlyHeadings.has(heading) ? `### ${date}\n` : ""}${sections[heading]!.map((item) => `- **${item.label}** ${item.text} — [${item.citations.join(", ")}]`).join("\n")}`).join("\n\n"); }
+const appendOnlyHeadings = new Set(["Alternatives considered", "Changes of understanding"]);
+function reviseEpisodeSections(body: string, date: string, sections: Record<string, DigestItem[]>): string {
+  for (const heading of headings) {
+    const items = sections[heading] ?? []; if (!items.length) continue;
+    const content = items.map((item) => `- **${item.label}** ${item.text} — [${item.citations.join(", ")}]`).join("\n"), match = new RegExp(`(^## ${heading}\\r?\\n)([\\s\\S]*?)(?=^#{1,2} |(?![\\s\\S]))`, "m").exec(body);
+    if (appendOnlyHeadings.has(heading)) body = match ? `${body.slice(0, match.index + match[0].length).replace(/\s*$/, "")}\n### ${date}\n${content}\n${body.slice(match.index + match[0].length)}` : `${body}${body.endsWith("\n") ? "" : "\n"}## ${heading}\n### ${date}\n${content}\n`;
+    else body = match ? `${body.slice(0, match.index)}${match[1]}${content}\n${body.slice(match.index + match[0].length)}` : `${body}${body.endsWith("\n") ? "" : "\n"}## ${heading}\n${content}\n`;
+  }
+  return body;
+}
+function citedSources(items: DigestItem[]): RecordSource[] {
+  const grouped = new Map<string, string[]>();
+  for (const citation of items.flatMap((item) => item.citations)) { const slash = citation.indexOf("/"), sessionId = citation.slice(0, slash), entryId = citation.slice(slash + 1), ids = grouped.get(sessionId) ?? []; if (!ids.includes(entryId)) ids.push(entryId); grouped.set(sessionId, ids); }
+  return [...grouped].map(([sessionId, entryIds]) => ({ sessionId, entryIds }));
+}
+function operationCitations(operation: RecordOperation): DigestItem[] { return operation.kind === "create-episode" ? Object.values(operation.sections).flat() : operation.kind === "update-episode" ? Object.values(operation.sections ?? {}).flat() : operation.kind === "create-commitment" ? [operation.description] : operation.changes.map((change) => ({ label: change.label, text: "", citations: change.citations })); }
+function citedSourcesInBody(body: string): RecordSource[] {
+  const citations = [...body.matchAll(/ — \[([^\]\r\n]+)\]$/gm)].flatMap(([, list]) => list!.split(", ").filter((citation) => { const slash = citation.indexOf("/"); return slash > 0 && slash < citation.length - 1; }));
+  return citedSources([{ label: "observed", text: "", citations }]);
+}
 function changeLine(change: CommitmentChange): string { const value = change.value === null ? "null" : Array.isArray(change.value) ? JSON.stringify(change.value) : change.value; return `${change.field}: ${value} (**${change.label}**) — [${change.citations.join(", ")}]`; }
 function updateMetadata(doc: ReturnType<typeof parseDocument>, values: Record<string, unknown>): void { for (const [key, value] of Object.entries(values)) doc.set(key, value); }
 function serialize(metadata: RecordMetadata | ReturnType<typeof parseDocument>, body: string): string {
@@ -148,17 +166,16 @@ function serialize(metadata: RecordMetadata | ReturnType<typeof parseDocument>, 
 }
 function renderFromRaw(index: RecordIndex, operation: RecordOperation, raw: string | undefined, targetPath: string): { path: string; content: string } | undefined {
   const create = operation.kind === "create-episode" || operation.kind === "create-commitment";
-  const id = create ? createRecordId(operation.spanSources, operation.localKey) : operation.id;
+  const id = create ? operation.recordId : operation.id;
   const existing = operation.kind.includes("episode") ? index.episodes.get(id) : index.commitments.get(id);
   if (create) {
     if (existing) return undefined;
     if (index.occupiedPaths.has(targetPath)) throw new Error(`Create target already exists: ${targetPath}`);
     let metadata: RecordMetadata; let body: string;
-    if (operation.kind === "create-episode") { metadata = { type: "episode", ...operation.fields, id, derived: true }; body = `${renderEpisodeSections(operation.sections)}\n<!-- samwise-operation:${operation.operationId} -->\n`; }
+    if (operation.kind === "create-episode") { metadata = { type: "episode", ...operation.fields, id, sources: citedSources(operationCitations(operation)), derived: true }; body = `${renderEpisodeSections(operation.sections, operation.fields.started)}\n`; }
     else {
-      metadata = { type: "commitment", ...operation.fields, id, derived: true, sources: operation.spanSources };
-      const history = semanticCommitmentFields.map((field) => { const value = (operation.fields as any)[field] ?? (field === "due" || field === "blocked_on" || field === "depends_on" ? null : undefined); return `${field}: ${JSON.stringify(value)} (**${operation.description.label}**) — [${operation.description.citations.join(", ")}]`; });
-      body = `## Description\n- **${operation.description.label}** ${operation.description.text} — [${operation.description.citations.join(", ")}]\n\n## History\n### ${operation.fields.created}\n${history.join("\n")}\n<!-- samwise-operation:${operation.operationId} -->\n`;
+      metadata = { type: "commitment", ...operation.fields, id, derived: true, sources: citedSources([operation.description]) };
+      body = `## Description\n- **${operation.description.label}** ${operation.description.text} — [${operation.description.citations.join(", ")}]\n\n## History\n### ${operation.fields.created}\ncreated (**${operation.description.label}**) — [${operation.description.citations.join(", ")}]\n`;
     }
     return { path: targetPath, content: serialize(metadata, body) };
   }
@@ -168,33 +185,36 @@ function renderFromRaw(index: RecordIndex, operation: RecordOperation, raw: stri
   const current = split.doc.toJSON();
   const valid = operation.kind === "update-episode" ? isEpisode(current) && current.id === id : isCommitment(current) && current.id === id;
   if (!valid) throw new Error(`Cannot reload update target ${id}: invalid or conflicting metadata`);
-  if (split.body.includes(`<!-- samwise-operation:${operation.operationId} -->`)) return undefined;
   let body = split.body;
   if (operation.kind === "update-episode") {
-    updateMetadata(split.doc, { ...operation.fields, updated: operation.updated, sources: mergeSources((current as Episode).sources, operation.spanSources) });
-    if (operation.sections) body = dateAppend(body, operation.updated, renderEpisodeSections(operation.sections));
+    const revised = operation.sections ? reviseEpisodeSections(body, operation.updated, operation.sections) : body;
+    const fieldChanged = Object.entries(operation.fields ?? {}).some(([key, value]) => JSON.stringify((current as any)[key]) !== JSON.stringify(value));
+    if (!fieldChanged && revised.trimEnd() === body.trimEnd()) throw new Error(`No-op update rejected: ${id}`);
+    updateMetadata(split.doc, { ...operation.fields, started: operation.earliestCitedDate < (current as Episode).started ? operation.earliestCitedDate : (current as Episode).started, updated: operation.updated, sources: citedSourcesInBody(revised) });
+    body = revised;
   } else if (operation.kind === "update-commitment") {
     const changes = operation.changes.filter((change) => {
       const value = (current as Commitment)[change.field as keyof Commitment];
       return !(value === undefined && change.value === null) && JSON.stringify(value) !== JSON.stringify(change.value);
     });
     for (const change of changes) { if (change.value === null) split.doc.delete(change.field); else split.doc.set(change.field, change.value); }
-    split.doc.set("updated", operation.updated); split.doc.set("sources", mergeSources((current as Commitment).sources, operation.spanSources));
-    if (changes.length) body = dateAppend(body, operation.updated, changes.map(changeLine).join("\n"));
+    if (!changes.length) throw new Error(`No-op update rejected: ${id}`);
+    split.doc.set("updated", operation.updated); split.doc.set("sources", mergeSources((current as Commitment).sources, citedSources(changes.map((change) => ({ label: change.label, text: "", citations: change.citations })))));
+    body = dateAppend(body, operation.updated, changes.map(changeLine).join("\n"));
   }
-  return { path: targetPath, content: serialize(split.doc, `${body}${body.endsWith("\n") ? "" : "\n"}<!-- samwise-operation:${operation.operationId} -->\n`) };
+  return { path: targetPath, content: serialize(split.doc, body.endsWith("\n") ? body : `${body}\n`) };
 }
 function operationTarget(index: RecordIndex, operation: RecordOperation): string {
-  if (operation.kind === "create-episode") { const id = createRecordId(operation.spanSources, operation.localKey); return join("episodes", `${operation.fields.started}-${slug(operation.fields.title, id)}.md`); }
-  if (operation.kind === "create-commitment") return join("commitments", `${createRecordId(operation.spanSources, operation.localKey)}.md`);
+  if (operation.kind === "create-episode") return episodeTarget(index, operation.filenameDate, operation.fields);
+  if (operation.kind === "create-commitment") return join("commitments", `${operation.recordId}.md`);
   const existing = operation.kind === "update-episode" ? index.episodes.get(operation.id) : index.commitments.get(operation.id);
   if (!existing) throw new Error(`Missing operation target ${operation.id}`);
   return existing.path;
 }
 /** Render against indexed raw snapshots; no filesystem access or mutation occurs. */
 export function renderOperation(index: RecordIndex, operation: RecordOperation): { path: string; content: string } | undefined {
-  validateOperations([operation], index); const path = operationTarget(index, operation);
-  const id = operation.kind === "create-episode" || operation.kind === "create-commitment" ? createRecordId(operation.spanSources, operation.localKey) : operation.id;
+  const path = operationTarget(index, operation);
+  const id = operation.kind === "create-episode" || operation.kind === "create-commitment" ? operation.recordId : operation.id;
   const existing = operation.kind.includes("episode") ? index.episodes.get(id) : index.commitments.get(id);
   return renderFromRaw(index, operation, existing?.raw, path);
 }
@@ -206,25 +226,6 @@ export function advanceOperation(index: RecordIndex, operation: RecordOperation,
   index.occupiedPaths.add(rendered.path);
 }
 function loadRawRecord(path: string, raw: string): RecordMetadata { const metadata = splitRecord(raw).doc.toJSON(); if (isEpisode(metadata) || isCommitment(metadata)) return metadata; throw new Error(`Invalid rendered record: ${path}`); }
-/** Apply using a current on-disk snapshot, preserving edits made after preparation; advance only after write succeeds. */
-export function applyOperation(dir: string, operation: RecordOperation, index: RecordIndex, writeAtomic: (path: string, content: string) => void): void {
-  validateOperations([operation], index); let relative = operationTarget(index, operation);
-  const actualIndex = loadRecordIndex(dir);
-  const id = operation.kind === "create-episode" || operation.kind === "create-commitment" ? createRecordId(operation.spanSources, operation.localKey) : operation.id;
-  const actual = operation.kind.includes("episode") ? actualIndex.episodes.get(id) : actualIndex.commitments.get(id);
-  if (operation.kind.startsWith("update") && !actual) throw new Error(`Cannot reload update target ${id}: missing or invalid metadata`);
-  if (operation.kind.startsWith("create") && actual) {
-    if (actual.body.includes(`<!-- samwise-operation:${operation.operationId} -->`)) return;
-    throw new Error(`Create target already exists with a different operation: ${id}`);
-  }
-  if (actual) relative = actual.path;
-  const path = isAbsolute(relative) ? relative : join(dir, relative);
-  actualIndex.occupiedPaths = new Set([...actualIndex.occupiedPaths, ...index.occupiedPaths]);
-  const rendered = renderFromRaw(actualIndex, operation, actual?.raw, relative);
-  if (!rendered) return;
-  if (actualIndex.occupiedPaths.has(relative) && !actual) throw new Error(`Create target already exists: ${relative}`);
-  mkdirSync(join(path, ".."), { recursive: true }); writeAtomic(path, rendered.content); advanceOperation(index, operation, { ...rendered, path });
-}
 export function loadRecordIndex(dir: string): RecordIndex {
   const index: RecordIndex = { episodes: new Map(), commitments: new Map(), invalidIds: new Set(), occupiedPaths: new Set() };
   for (const [folder, kind] of [["episodes", "episode"], ["commitments", "commitment"]] as const) {
@@ -238,23 +239,23 @@ export function loadRecordIndex(dir: string): RecordIndex {
         const prior = records.get(metadata.id);
         if (prior) {
           records.delete(metadata.id); index.invalidIds.add(metadata.id);
-          console.warn(`Skipping ambiguous ${kind} ID ${metadata.id} in ${prior.path} and ${file}`);
+          warnRecordOnce(`${kind}:${metadata.id}`, `Skipping ambiguous ${kind} ID ${metadata.id} in ${prior.path} and ${file}`);
           continue;
         }
-        if (index.invalidIds.has(metadata.id)) { console.warn(`Skipping ambiguous ${kind} ID ${metadata.id} in ${file}`); continue; }
+        if (index.invalidIds.has(metadata.id)) { warnRecordOnce(`${kind}:${metadata.id}`, `Skipping ambiguous ${kind} ID ${metadata.id} in ${file}`); continue; }
         records.set(metadata.id, { path: file, metadata: metadata as never, body: split.body, raw });
       } catch (error) {
-        console.warn(`Skipping invalid ${kind} record ${file}: ${(error as Error).message}`); index.invalidIds.add(name.replace(/\.md$/, ""));
+        warnRecordOnce(`${kind}:${file}`, `Skipping invalid ${kind} record ${file}: ${(error as Error).message}`); index.invalidIds.add(name.replace(/\.md$/, ""));
         try { const match = readFileSync(file, "utf8").match(/^---\r?\n([\s\S]*?)\r?\n---/); if (match) { const id = parseDocument(match[1]).get("id"); if (typeof id === "string") index.invalidIds.add(id); } } catch { /* Filename ID remains available. */ }
       }
     }
   }
   return index;
 }
-export function buildRecordContext(index: RecordIndex, spanDate: string): RecordContext {
-  const cutoff = Date.parse(`${spanDate}T00:00:00Z`) - 30 * 86400000;
+export function buildRecordContext(index: RecordIndex, spanDate: string, activityDays: string[] = [spanDate]): RecordContext {
+  const recentDays = new Set(activityDays.filter((date) => date <= spanDate).sort().slice(-2));
   return {
     commitments: [...index.commitments.values()].map(({ metadata }) => metadata).filter((item) => !terminalCommitments.has(item.status)).map(({ id, title, status, owner, next_action }) => ({ id, title, status, owner, next_action })),
-    episodes: [...index.episodes.values()].map(({ metadata, body }) => ({ metadata, body })).filter(({ metadata }) => metadata.status === "open" && Date.parse(`${metadata.updated}T00:00:00Z`) >= cutoff && metadata.updated <= spanDate).map(({ metadata, body }) => ({ id: metadata.id, title: metadata.title, summary: body.replace(/^<!-- samwise-operation:[^\n]*-->\s*$/gm, "").trim().slice(0, 300) })),
+    episodes: [...index.episodes.values()].map(({ metadata, body }) => ({ metadata, body })).filter(({ metadata }) => metadata.status === "open" && recentDays.has(metadata.updated)).map(({ metadata, body }) => ({ id: metadata.id, title: metadata.title, summary: body.trim().slice(0, 300), currentText: body.trim() })),
   };
 }

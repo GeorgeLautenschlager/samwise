@@ -52,7 +52,7 @@ test("two invalid outputs fail without writing outputs, journal, or state", () =
   assert.equal(existsSync(join(memory, "state.json")), false);
   assert.equal(readdirSync(join(memory, "digests")).length, 0);
 }));
-test("updates targeting invalid record IDs fail immediately without retry or writes", async () => {
+test("invalid record targets use ordinary validation retry and leave prior outputs untouched", async () => {
   for (const kind of ["episode", "commitment"] as const) await fixture(async (sessions, memory) => {
     const records = join(memory, kind === "episode" ? "episodes" : "commitments");
     let initialCalls = 0;
@@ -83,10 +83,10 @@ test("updates targeting invalid record IDs fail immediately without retry or wri
       const operation = kind === "episode"
         ? { kind: "update-episode", id, fields: { status: "resolved" }, sections: { Outcome: [{ label: "observed", text: "Updated", citations: ["s-1/u2"] }] } }
         : { kind: "update-commitment", id, changes: [{ field: "status", value: "done", label: "observed", citations: ["s-1/u2"] }] };
-      return JSON.stringify({ digest: JSON.parse(output("s-1/u2")).digest, operations: calls === 1 ? [operation] : [] });
+      return JSON.stringify({ digest: JSON.parse(output("s-1/u2")).digest, operations: [operation] });
     } };
-    await assert.rejects(consolidate({ sessionsDir: sessions, memoryDir: memory, model: retryModel }), new RegExp(`Cannot update invalid/ambiguous record ID: ${id}`));
-    assert.equal(calls, 1);
+    await assert.rejects(consolidate({ sessionsDir: sessions, memoryDir: memory, model: retryModel }), /invalid episode update target|Cannot update invalid record/);
+    assert.equal(calls, 2);
     assert.equal(readFileSync(recordPath, "utf8"), brokenRecord);
     assert.equal(readFileSync(join(memory, "state.json"), "utf8"), priorState);
     assert.equal(readFileSync(join(memory, "digests", "2026-10-16.md"), "utf8"), priorDigest);

@@ -84,7 +84,7 @@ function isProcessable(entry: TranscriptEntry): boolean {
   return entry.role === "user" || entry.role === "assistant" || entry.role === "toolResult";
 }
 
-function localDate(timestamp: string): string {
+export function localDate(timestamp: string): string {
   if (!timestamp) return "unknown-date";
   const date = new Date(timestamp);
   if (!Number.isFinite(date.getTime())) return "unknown-date";
