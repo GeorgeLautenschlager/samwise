@@ -57,7 +57,9 @@ original request id.
    with earlier pieces. Do not review or steer a worker's in-progress changes;
    steer a running worker only to correct a misunderstood brief. If changes are
    needed, resume the same worker with specific feedback rather than starting
-   over. Each batch of feedback, including any steering, counts as a revision
+   over. If resuming fails for a runtime reason, launch a replacement worker
+   with the original brief, the previous report, the current diff state, and
+   the feedback; this does not reset the round count. Each batch of feedback, including any steering, counts as a revision
    round. Launch `reviewer` only for a piece that is risky or that
    you cannot judge confidently. After two unsuccessful revision rounds,
    re-scope the piece or escalate.
