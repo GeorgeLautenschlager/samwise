@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "bin": {
+    "samwise-memory": "src/cli.ts"
+  },
   "scripts": {
     "test": "node --experimental-strip-types --test",
     "typecheck": "tsc --noEmit"
@@ -10,5 +13,10 @@
   "devDependencies": {
     "@types/node": "^22.15.30",
     "typescript": "^5.8.3"
+  },
+  "dependencies": {
+    "@earendil-works/pi-ai": "^1.3.0",
+    "@earendil-works/pi-coding-agent": "^1.3.0",
+    "yaml": "^2.9.1"
   }
 }

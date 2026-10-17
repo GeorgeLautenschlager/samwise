@@ -27,9 +27,21 @@ test("marks inactive fork exploration abandoned but preserves copied active ance
   assert.equal(snapshot.entries.find((entry) => entry.id === "deadbeef")?.abandoned, true);
   assert.equal(snapshot.entries.find((entry) => entry.id === "12345678")?.abandoned, false);
   const abandoned = snapshot.entries.find((entry) => entry.id === "deadbeef")!;
-  assert.match(abandoned.processingKey, /:abandoned$/);
   assert.equal(planTranscriptSpans(snapshot).processableCount, 3);
-  assert.equal(planTranscriptSpans(snapshot, new Set([abandoned.processingKey])).processableCount, 2);
+  assert.equal(planTranscriptSpans(snapshot, new Set([abandoned.identity])).processableCount, 2);
+}));
+
+test("deduplicates copied history when Pi rewires parents around removed branch labels", () => fixture((directory) => {
+  const shared = row("u1", null, "user", "question");
+  const answer = { ...row("a1", "label-1", "assistant", "same answer", "2026-10-16T10:01:00.000Z", "stop"), label: "original branch" };
+  writeSession(join(directory, "original.jsonl"), [shared, { type: "label", id: "label-1", parentId: "u1", timestamp: "2026-10-16T10:00:30.000Z", text: "branch" }, answer]);
+  const { label: _label, ...clone } = answer;
+  writeSession(join(directory, "fork.jsonl"), [shared, { ...clone, parentId: "u1" }]);
+  const snapshot = readTranscriptSnapshot(directory);
+  const copies = snapshot.entries.filter((entry) => entry.id === "a1");
+  assert.equal(copies.length, 2);
+  assert.equal(copies[0].identity, copies[1].identity);
+  assert.equal(planTranscriptSpans(snapshot).processableCount, 2);
 }));
 
 test("deduplicates clone history with content-derived identity without conflating short IDs", () => fixture((directory) => {
@@ -61,7 +73,9 @@ test("uses per-session ancestry for unfinished status when a fork entry is activ
   assert.equal(oldInFork.abandoned, false);
   assert.equal(oldInFork.sessionAbandoned, true);
   const plan = planTranscriptSpans(snapshot);
+  assert.deepEqual(plan.spans.flatMap((span) => span.entries.map((entry) => entry.id)), ["u1", "a1"]);
   assert.equal(plan.deferredUnfinished.some((entry) => entry.id === "u1" && entry.sessionPath.endsWith("fork.jsonl")), true);
+  assert.equal(plan.deferredUnfinished.some((entry) => entry.id === "a2" && entry.sessionPath.endsWith("fork.jsonl")), true);
 }));
 
 test("does not let an abandoned completed assistant finish the active branch's user exchange", () => fixture((directory) => {
@@ -93,7 +107,7 @@ test("carries bounded tool results and only preceding covered ancestry into cont
   assert.equal(result.text, "");
   assert.equal(result.toolResults[0].length <= 507, true);
   assert.equal("raw" in result, false);
-  const covered = new Set(snapshot.entries.filter((entry) => ["u1", "call", "result", "answer", "future", "unrelated"].includes(entry.id)).map((entry) => entry.processingKey));
+  const covered = new Set(snapshot.entries.filter((entry) => ["u1", "call", "result", "answer", "future", "unrelated"].includes(entry.id)).map((entry) => entry.identity));
   const plan = planTranscriptSpans(snapshot, covered, 1);
   assert.deepEqual(plan.context.map((entry) => entry.id), ["u1", "call", "result", "answer", "future"]);
   assert.equal(plan.context.some((entry) => entry.id === "unrelated"), false);
@@ -108,17 +122,17 @@ test("groups new entries by local day and enforces entry limit even within one e
   assert.equal(plan.spans.length, 1);
 }));
 
-test("reprocesses an entry when its branch classification changes", () => fixture((directory) => {
+test("branch classification changes do not create a second processing identity", () => fixture((directory) => {
   const path = join(directory, "session.jsonl");
   writeSession(path, [row("u1", null, "user", "question"), row("a1", "u1", "assistant", "answer", undefined, "stop")]);
   const before = readTranscriptSnapshot(directory);
-  const priorKey = before.entries.find((entry) => entry.id === "a1")!.processingKey;
+  const priorKey = before.entries.find((entry) => entry.id === "a1")!.identity;
   appendFileSync(path, `${JSON.stringify(row("a2", "u1", "assistant", "new answer", undefined, "stop"))}\n`);
   const after = readTranscriptSnapshot(directory);
   const changed = after.entries.find((entry) => entry.id === "a1")!;
   assert.equal(changed.abandoned, true);
-  assert.notEqual(changed.processingKey, priorKey);
-  assert.equal(planTranscriptSpans(after, new Set([priorKey])).spans.flatMap((span) => span.entries).some((entry) => entry.id === "a1"), true);
+  assert.equal(changed.identity, priorKey);
+  assert.equal(planTranscriptSpans(after, new Set([priorKey])).spans.flatMap((span) => span.entries).some((entry) => entry.id === "a1"), false);
 }));
 
 test("freezes byte boundary before later appends", () => fixture((directory) => {

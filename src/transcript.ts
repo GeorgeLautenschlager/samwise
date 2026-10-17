@@ -13,7 +13,6 @@ export interface TranscriptEntry {
   toolCalls: Array<{ name: string; args: string }>;
   toolResults: string[];
   identity: string;
-  processingKey: string;
   abandoned: boolean;
   sessionAbandoned: boolean;
   sessionPath: string;
@@ -135,14 +134,15 @@ function readSession(path: string, size: number): { entries: TranscriptEntry[]; 
   for (let node = leaf; node && typeof node.id === "string"; node = typeof node.parentId === "string" ? byId.get(node.parentId) : undefined) ancestry.add(node.id);
   const entries = records.map((raw) => {
     const formatted = content(raw);
-    const hash = createHash("sha256").update(canonical(raw)).digest("hex");
+    // Identity tracks the semantic Pi message record; parentId and clone labels are structural metadata.
+    const semanticRecord = { id: raw.id, timestamp: raw.timestamp, type: raw.type, message: raw.message };
+    const hash = createHash("sha256").update(canonical(semanticRecord)).digest("hex");
     return {
       id: raw.id as string,
       parentId: typeof raw.parentId === "string" ? raw.parentId : null,
       timestamp: typeof raw.timestamp === "string" ? raw.timestamp : "",
       ...formatted,
       identity: `${raw.id}:${hash}`,
-      processingKey: "",
       abandoned: !ancestry.has(raw.id as string),
       sessionAbandoned: !ancestry.has(raw.id as string),
       sessionId,
@@ -158,10 +158,7 @@ export function readTranscriptSnapshot(directory?: string): TranscriptSnapshot {
   const boundaries = paths.map((path) => ({ path, size: statSync(path).size }));
   const loaded = boundaries.map(({ path, size }) => ({ path, size, ...readSession(path, size) }));
   const active = new Set(loaded.flatMap((session) => session.entries.filter((entry) => !entry.abandoned).map((entry) => entry.identity)));
-  for (const session of loaded) for (const entry of session.entries) {
-    if (active.has(entry.identity)) entry.abandoned = false;
-    entry.processingKey = `${entry.identity}:${entry.abandoned ? "abandoned" : "active"}`;
-  }
+  for (const session of loaded) for (const entry of session.entries) if (active.has(entry.identity)) entry.abandoned = false;
   return {
     startedAt: new Date().toISOString(),
     sessions: loaded.map(({ path, size, entries, sessionId }) => ({ path, size, entries, sessionId })),
@@ -204,13 +201,11 @@ export function planTranscriptSpans(snapshot: TranscriptSnapshot, coveredEntryKe
     const descendants = activeBranch.filter((entry) => isDescendant(entry, user, session));
     if (!descendants.some(completedAssistant)) deferredUnfinished.push(user, ...descendants.filter(isProcessable));
   }
-  const unfinishedIdentities = new Set(deferredUnfinished.map((entry) => entry.identity));
+  const unfinishedOccurrences = new Set(deferredUnfinished.map((entry) => `${entry.sessionPath}\0${entry.identity}`));
   const availableByIdentity = new Map<string, TranscriptEntry>();
-  for (const entry of sessionEntries) if (isProcessable(entry) && !unfinishedIdentities.has(entry.identity)) availableByIdentity.set(entry.identity, entry);
+  for (const entry of sessionEntries) if (isProcessable(entry) && !unfinishedOccurrences.has(`${entry.sessionPath}\0${entry.identity}`)) availableByIdentity.set(entry.identity, entry);
   const available = [...availableByIdentity.values()];
-  // Persist processingKey in digests: stable content identity deduplicates clones, while
-  // the branch-state suffix makes a later active/abandoned reclassification processable.
-  const candidates = available.filter((entry) => !coveredEntryKeys.has(entry.processingKey));
+  const candidates = available.filter((entry) => !coveredEntryKeys.has(entry.identity));
   const selected = candidates.slice(0, limit);
   const contexts: TranscriptEntry[] = [];
   const bySessionId = new Map<string, TranscriptEntry[]>();
@@ -227,7 +222,7 @@ export function planTranscriptSpans(snapshot: TranscriptSnapshot, coveredEntryKe
     while (parentId !== null) {
       const parent = session.find((entry) => entry.id === parentId);
       if (!parent) break;
-      if (isProcessable(parent) && coveredEntryKeys.has(parent.processingKey)) ancestry.push(parent);
+      if (isProcessable(parent) && coveredEntryKeys.has(parent.identity)) ancestry.push(parent);
       parentId = parent.parentId;
     }
     for (const parent of ancestry.reverse().slice(-8)) if (!contextIdentities.has(parent.identity)) {
@@ -247,7 +242,7 @@ export function planTranscriptSpans(snapshot: TranscriptSnapshot, coveredEntryKe
     context: contexts,
     deferredUnfinished,
     abandonedCount: entries.filter((entry) => entry.abandoned).length,
-    coveredCount: entries.filter((entry) => coveredEntryKeys.has(entry.processingKey)).length,
+    coveredCount: entries.filter((entry) => coveredEntryKeys.has(entry.identity)).length,
     processableCount: candidates.length,
     limitDeferredCount: candidates.length - selected.length,
   };
