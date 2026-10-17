@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative, resolve } from "node:path";
+import { join, resolve } from "node:path";
 
 export interface TranscriptEntry {
   id: string;
@@ -18,18 +18,8 @@ export interface TranscriptEntry {
   sessionPath: string;
 }
 
-export interface SessionSnapshot {
-  path: string;
-  sessionId: string;
-  size: number;
-  entries: TranscriptEntry[];
-}
-
 export interface TranscriptSnapshot {
-  startedAt: string;
-  sessions: SessionSnapshot[];
   entries: TranscriptEntry[];
-  incompleteTailCount: number;
 }
 
 type RawEntry = Record<string, unknown> & { id?: unknown; parentId?: unknown; timestamp?: unknown; type?: unknown; message?: unknown };
@@ -42,25 +32,26 @@ function canonical(value: unknown): string {
   return JSON.stringify(value) ?? "null";
 }
 
-function walk(directory: string, root: string, result: string[]): void {
+function walk(directory: string, result: string[]): void {
   for (const item of readdirSync(directory, { withFileTypes: true })) {
     if (item.name === "subagent-artifacts" || item.name.startsWith("run-")) continue;
     const path = join(directory, item.name);
-    if (item.isDirectory()) walk(path, root, result);
-    else if (item.isFile() && item.name.endsWith(".jsonl") && !(item.name === "session.jsonl" && relative(root, path).split(/[\\/]/).length > 1)) result.push(path);
+    if (item.isDirectory()) walk(path, result);
+    else if (item.isFile() && item.name.endsWith(".jsonl")) result.push(path);
   }
 }
 
 export function discoverSessionFiles(directory = join(process.env.HOME ?? "", ".pi", "agent", "sessions")): string[] {
   const root = resolve(directory);
   const result: string[] = [];
-  walk(root, root, result);
+  walk(root, result);
   return result.sort();
 }
 
 function content(entry: RawEntry): Pick<TranscriptEntry, "role" | "stopReason" | "text" | "toolCalls" | "toolResults"> {
   const message = entry.message && typeof entry.message === "object" ? entry.message as Record<string, unknown> : {};
   const blocks = Array.isArray(message.content) ? message.content as Array<Record<string, unknown>> : [];
+  const plainText = typeof message.content === "string" ? message.content : "";
   const text: string[] = [];
   const toolCalls: TranscriptEntry["toolCalls"] = [];
   const toolResults: string[] = [];
@@ -73,8 +64,12 @@ function content(entry: RawEntry): Pick<TranscriptEntry, "role" | "stopReason" |
   return {
     role: typeof message.role === "string" ? message.role : "event",
     ...(typeof message.stopReason === "string" ? { stopReason: message.stopReason } : {}),
-    text: message.role === "toolResult" ? "" : text.join("\n"), toolCalls, toolResults,
+    text: message.role === "toolResult" ? "" : capText(typeof message.content === "string" ? plainText : text.join("\n")), toolCalls, toolResults,
   };
+}
+
+function capText(value: string): string {
+  return value.length > 12_000 ? `${value.slice(0, 12_000)}[truncated]` : value;
 }
 
 function abbreviated(value: unknown): string {
@@ -110,15 +105,13 @@ function isDescendant(entry: TranscriptEntry, ancestor: TranscriptEntry, session
 }
 
 function completedAssistant(entry: TranscriptEntry): boolean {
-  // Pi uses stop for normal completion; toolUse means the assistant turn is still in flight.
-  return entry.role === "assistant" && ["stop", "end_turn"].includes(entry.stopReason ?? "");
+  return entry.role === "assistant" && !["toolUse", "pending", "deferred"].includes(entry.stopReason ?? "");
 }
 
-function readSession(path: string, size: number): { entries: TranscriptEntry[]; incomplete: number; sessionId: string } {
+function readSession(path: string, size: number): TranscriptEntry[] {
   const bytes = readFileSync(path).subarray(0, size);
   const lastNewline = bytes.lastIndexOf(10);
   const complete = lastNewline < 0 ? Buffer.alloc(0) : bytes.subarray(0, lastNewline + 1);
-  const tail = bytes.subarray(lastNewline + 1);
   const rows = complete.toString("utf8").split("\n").filter(Boolean);
   const parsed: RawEntry[] = rows.map((line, index) => {
     try { return JSON.parse(line) as RawEntry; }
@@ -127,8 +120,7 @@ function readSession(path: string, size: number): { entries: TranscriptEntry[]; 
   const header = parsed.find((entry) => entry.type === "session");
   const sessionId = typeof header?.id === "string" ? header.id : path;
   const records = parsed.filter((entry) => typeof entry.id === "string" && (entry.parentId === null || typeof entry.parentId === "string"));
-  const children = new Set(records.map((entry) => entry.parentId).filter((id): id is string => typeof id === "string"));
-  const leaf = [...records].reverse().find((entry) => typeof entry.id === "string" && !children.has(entry.id)) ?? records.at(-1);
+  const leaf = records.at(-1);
   const byId = new Map(records.map((entry) => [entry.id as string, entry]));
   const ancestry = new Set<string>();
   for (let node = leaf; node && typeof node.id === "string"; node = typeof node.parentId === "string" ? byId.get(node.parentId) : undefined) ancestry.add(node.id);
@@ -149,22 +141,17 @@ function readSession(path: string, size: number): { entries: TranscriptEntry[]; 
       sessionPath: path,
     };
   });
-  return { entries, incomplete: tail.length > 0 ? 1 : 0, sessionId };
+  return entries;
 }
 
 export function readTranscriptSnapshot(directory?: string): TranscriptSnapshot {
   const paths = discoverSessionFiles(directory);
   // Freeze every file's byte boundary before opening any transcript.
   const boundaries = paths.map((path) => ({ path, size: statSync(path).size }));
-  const loaded = boundaries.map(({ path, size }) => ({ path, size, ...readSession(path, size) }));
-  const active = new Set(loaded.flatMap((session) => session.entries.filter((entry) => !entry.abandoned).map((entry) => entry.identity)));
-  for (const session of loaded) for (const entry of session.entries) if (active.has(entry.identity)) entry.abandoned = false;
-  return {
-    startedAt: new Date().toISOString(),
-    sessions: loaded.map(({ path, size, entries, sessionId }) => ({ path, size, entries, sessionId })),
-    entries: loaded.flatMap((session) => session.entries),
-    incompleteTailCount: loaded.reduce((total, session) => total + session.incomplete, 0),
-  };
+  const sessions = boundaries.map(({ path, size }) => readSession(path, size));
+  const active = new Set(sessions.flatMap((entries) => entries.filter((entry) => !entry.abandoned).map((entry) => entry.identity)));
+  for (const entries of sessions) for (const entry of entries) if (active.has(entry.identity)) entry.abandoned = false;
+  return { entries: sessions.flat() };
 }
 
 export interface PlannedSpan {
@@ -176,8 +163,6 @@ export interface SpanPlan {
   spans: PlannedSpan[];
   context: TranscriptEntry[];
   deferredUnfinished: TranscriptEntry[];
-  abandonedCount: number;
-  coveredCount: number;
   processableCount: number;
   limitDeferredCount: number;
 }
@@ -185,10 +170,9 @@ export interface SpanPlan {
 export function planTranscriptSpans(snapshot: TranscriptSnapshot, coveredEntryKeys: ReadonlySet<string> = new Set(), limit = 200): SpanPlan {
   if (!Number.isInteger(limit) || limit < 1) throw new RangeError("limit must be a positive integer");
   const entries = snapshot.entries;
-  const sessionEntries = entries;
   const deferredUnfinished: TranscriptEntry[] = [];
   const sessions = new Map<string, TranscriptEntry[]>();
-  for (const entry of sessionEntries) {
+  for (const entry of entries) {
     const session = sessions.get(entry.sessionPath) ?? [];
     session.push(entry);
     sessions.set(entry.sessionPath, session);
@@ -203,8 +187,9 @@ export function planTranscriptSpans(snapshot: TranscriptSnapshot, coveredEntryKe
   }
   const unfinishedOccurrences = new Set(deferredUnfinished.map((entry) => `${entry.sessionPath}\0${entry.identity}`));
   const availableByIdentity = new Map<string, TranscriptEntry>();
-  for (const entry of sessionEntries) if (isProcessable(entry) && !unfinishedOccurrences.has(`${entry.sessionPath}\0${entry.identity}`)) availableByIdentity.set(entry.identity, entry);
+  for (const entry of entries) if (isProcessable(entry) && !unfinishedOccurrences.has(`${entry.sessionPath}\0${entry.identity}`)) availableByIdentity.set(entry.identity, entry);
   const available = [...availableByIdentity.values()];
+  const deferred = deferredUnfinished.filter((entry) => !coveredEntryKeys.has(entry.identity) && !availableByIdentity.has(entry.identity));
   const candidates = available.filter((entry) => !coveredEntryKeys.has(entry.identity));
   const selected = candidates.slice(0, limit);
   const contexts: TranscriptEntry[] = [];
@@ -240,9 +225,7 @@ export function planTranscriptSpans(snapshot: TranscriptSnapshot, coveredEntryKe
   return {
     spans: [...spans].map(([date, spanEntries]) => ({ date, entries: spanEntries })),
     context: contexts,
-    deferredUnfinished,
-    abandonedCount: entries.filter((entry) => entry.abandoned).length,
-    coveredCount: entries.filter((entry) => coveredEntryKeys.has(entry.identity)).length,
+    deferredUnfinished: [...new Map(deferred.map((entry) => [entry.identity, entry])).values()],
     processableCount: candidates.length,
     limitDeferredCount: candidates.length - selected.length,
   };

@@ -3,7 +3,7 @@ import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readd
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { consolidate, getConsolidationStatus, resolveMemoryDir, type ModelAdapter } from "../src/consolidator.ts";
 import { parse } from "yaml";
 
@@ -143,7 +143,7 @@ test("a live lock blocks consolidation without writing store files", async () =>
   const lockPath = join(memory, ".consolidate.lock");
   writeFileSync(lockPath, JSON.stringify({ pid: process.pid }));
   const before = readdirSync(memory).sort();
-  await assert.rejects(consolidate({ sessionsDir: sessions, memoryDir: memory, model: validModel() }), /owner PID .*PID alive/);
+  await assert.rejects(consolidate({ sessionsDir: sessions, memoryDir: memory, model: validModel() }), /Lock exists at/);
   assert.deepEqual(readdirSync(memory).sort(), before);
   assert.equal(existsSync(join(memory, "digests")), false);
 }));
@@ -155,14 +155,80 @@ test("an existing stale lock blocks consolidation and status reports it without 
   writeFileSync(lockPath, JSON.stringify({ pid: 2_000_000_000 }));
   const before = readdirSync(memory).sort();
   const status = getConsolidationStatus({ sessionsDir: sessions, memoryDir: memory });
-  assert.equal(status.lock?.path, lockPath);
-  assert.equal(status.lock?.ownerPid, 2_000_000_000);
-  assert.equal(status.lock?.ownerAlive, false);
-  assert.equal(status.lock?.removeCommand, `rm -f -- '${lockPath}'`);
+  assert.match(status.lock ?? "", /owner PID 2000000000/);
+  assert.match(status.lock ?? "", /rm -f --/);
+  assert.match(status.lock ?? "", new RegExp(lockPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   assert.deepEqual(readdirSync(memory).sort(), before);
-  await assert.rejects(consolidate({ sessionsDir: sessions, memoryDir: memory, model: validModel() }), new RegExp(`Consolidation lock exists at ${lockPath.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&")}`));
+  await assert.rejects(consolidate({ sessionsDir: sessions, memoryDir: memory, model: validModel() }), new RegExp(`Lock exists at ${lockPath.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&")}`));
   assert.equal(existsSync(lockPath), true);
   assert.deepEqual(readdirSync(memory).sort(), before);
+}));
+
+test("post-commit status matches status recomputed at the same limit", async () => fixture(async (_root, sessions, memory) => {
+  writeSession(sessions, [row("u1", null, "user", "one"), row("a1", "u1", "assistant", "one", undefined, "stop"), row("u2", "a1", "user", "two"), row("a2", "u2", "assistant", "two", undefined, "stop"), row("u3", "a2", "user", "three"), row("a3", "u3", "assistant", "three", undefined, "stop")]);
+  const result = await consolidate({ sessionsDir: sessions, memoryDir: memory, maxEntries: 2, model: validModel() });
+  assert.deepEqual(result.status, getConsolidationStatus({ sessionsDir: sessions, memoryDir: memory, maxEntries: 2 }));
+  assert.equal(result.status.limitDeferred, 2);
+}));
+
+test("invalid digests are skipped by status, CRLF digests recover coverage, and invalid targets are preserved", async () => fixture(async (_root, sessions, memory) => {
+  writeSession(sessions, [row("u1", null, "user", "question"), row("a1", "u1", "assistant", "answer", undefined, "stop")]);
+  mkdirSync(join(memory, "digests"), { recursive: true });
+  writeFileSync(join(memory, "digests", "stray.md"), "not frontmatter");
+  writeFileSync(join(memory, "digests", "wrong-type.md"), `---\ntype: other\ndate: 2026-10-15\nderived: true\nprojects: []\ntags: []\nsources: []\n---\ntext\n`);
+  writeFileSync(join(memory, "digests", "bad-yaml.md"), `---\ntype: [\n---\ntext\n`);
+  const warn = console.error; const warnings: string[] = []; console.error = (message) => warnings.push(String(message));
+  try { assert.equal(getConsolidationStatus({ sessionsDir: sessions, memoryDir: memory }).outstandingNewProcessable, 2); } finally { console.error = warn; }
+  assert.equal(warnings.length, 3);
+  assert.match(warnings.join("\n"), /stray.md/);
+  assert.match(warnings.join("\n"), /wrong-type.md/);
+  assert.match(warnings.join("\n"), /bad-yaml.md/);
+  writeFileSync(join(memory, "digests", "2026-10-16.md"), '---\r\ntype: digest\r\ndate: 2026-10-16\r\nderived: true\r\nprojects: []\r\ntags: []\r\nsources:\r\n  - sessionId: s-1\r\n    entryIds:\r\n      - u1\r\n---\r\n\r\nPrior\r\n');
+  assert.equal(getConsolidationStatus({ sessionsDir: sessions, memoryDir: memory }).outstandingNewProcessable, 1);
+  const before = readFileSync(join(memory, "digests", "2026-10-16.md"));
+  writeFileSync(join(memory, "digests", "2026-10-16.md"), "bad target");
+  let calls = 0;
+  await assert.rejects(consolidate({ sessionsDir: sessions, memoryDir: memory, model: validModel(() => calls++) }), /Invalid digest frontmatter/);
+  assert.equal(calls, 0);
+  assert.equal(readFileSync(join(memory, "digests", "2026-10-16.md"), "utf8"), "bad target");
+  assert.equal(existsSync(join(memory, "state.json")), false);
+  writeFileSync(join(memory, "digests", "2026-10-16.md"), before);
+  let successfulWarnings = 0; console.error = () => successfulWarnings++;
+  try { await consolidate({ sessionsDir: sessions, memoryDir: memory, model: validModel() }); } finally { console.error = warn; }
+  assert.equal(successfulWarnings, 3);
+  assert.equal(existsSync(join(memory, "digests", "2026-10-16.md")), true);
+  assert.equal(existsSync(join(memory, "state.json")), true);
+  assert.equal(readFileSync(join(memory, "digests", "stray.md"), "utf8"), "not frontmatter");
+  assert.match(readFileSync(join(memory, "digests", "wrong-type.md"), "utf8"), /type: other/);
+  assert.match(readFileSync(join(memory, "digests", "bad-yaml.md"), "utf8"), /type: \[/);
+}));
+
+test("SIGINT and SIGTERM during model wait release lock without changing state", async () => fixture(async (_root, sessions, memory) => {
+  writeSession(sessions, [row("u1", null, "user", "question"), row("a1", "u1", "assistant", "answer", undefined, "stop")]);
+  mkdirSync(memory, { recursive: true });
+  const statePath = join(memory, "state.json");
+  const state = '{"version":1,"processedIdentities":[],"lastSuccessfulRun":null}\n'; writeFileSync(statePath, state);
+  for (const signal of ["SIGINT", "SIGTERM"] as const) {
+    const script = `import { consolidate } from ${JSON.stringify(new URL("../src/consolidator.ts", import.meta.url).href)}; await consolidate({sessionsDir:${JSON.stringify(sessions)},memoryDir:${JSON.stringify(memory)},model:{async consolidate(){setInterval(()=>{},1000);console.log("WAITING");return await new Promise(()=>{});}}});`;
+    const child = spawn(process.execPath, ["--experimental-strip-types", "--input-type=module", "-e", script], { stdio: ["ignore", "pipe", "pipe"] });
+    let waiting = false;
+    const exited = new Promise<number | null>((resolve, reject) => {
+      const timeout = setTimeout(() => { child.kill("SIGKILL"); reject(new Error(`child timed out during ${signal}`)); }, 10_000);
+      child.once("error", (error) => { clearTimeout(timeout); reject(error); });
+      child.once("exit", (code) => { clearTimeout(timeout); resolve(code); });
+      child.stdout.on("data", (chunk) => {
+        output += chunk.toString();
+        if (!waiting && output.includes("WAITING")) { waiting = true; setTimeout(() => child.kill(signal), 50); }
+      });
+      let output = "";
+    });
+    const exitCode = await exited;
+    assert.equal(waiting, true, `${signal} child reached the model wait`);
+    assert.equal(typeof exitCode, "number", `${signal} child must exit normally with a code`);
+    assert.notEqual(exitCode, 0, `${signal} child must exit nonzero`);
+    assert.equal(readFileSync(statePath, "utf8"), state);
+    assert.equal(existsSync(join(memory, ".consolidate.lock")), false, `lock remained after ${signal}`);
+  }
 }));
 
 test("resolveMemoryDir applies explicit, nonempty environment, and default precedence", () => {

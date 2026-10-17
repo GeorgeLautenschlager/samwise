@@ -18,12 +18,14 @@ export function resolveMemoryDir(memoryDir?: string): string {
 function digestPath(dir: string, date: string): string { return join(dir, "digests", `${date}.md`); }
 function readDigest(path: string): { frontmatter: DigestFrontmatter; body: string } | undefined {
   if (!existsSync(path)) return undefined;
-  const raw = readFileSync(path, "utf8");
+  const raw = readFileSync(path, "utf8").replaceAll("\r\n", "\n");
   const match = raw.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
   if (!match) throw new Error(`Invalid digest frontmatter: ${path}`);
-  const metadata = parse(match[1]) as DigestFrontmatter;
-  if (metadata.type !== "digest" || !Array.isArray(metadata.sources) || metadata.sources.some((source) => !source || typeof source.sessionId !== "string" || !Array.isArray(source.entryIds) || source.entryIds.some((id) => typeof id !== "string"))) throw new Error(`Invalid digest metadata: ${path}`);
-  return { frontmatter: metadata, body: match[2] };
+  let metadata: unknown;
+  try { metadata = parse(match[1]); } catch (error) { throw new Error(`Invalid digest YAML: ${path}`, { cause: error }); }
+  const value = metadata as Partial<DigestFrontmatter> | null;
+  if (!value || value.type !== "digest" || typeof value.date !== "string" || value.derived !== true || !Array.isArray(value.projects) || value.projects.some((item) => typeof item !== "string") || !Array.isArray(value.tags) || value.tags.some((item) => typeof item !== "string") || !Array.isArray(value.sources) || value.sources.some((source) => !source || typeof source.sessionId !== "string" || !Array.isArray(source.entryIds) || source.entryIds.some((id) => typeof id !== "string"))) throw new Error(`Invalid digest metadata: ${path}`);
+  return { frontmatter: value as DigestFrontmatter, body: match[2] };
 }
 function coverageFrom(dir: string, snapshot: ReturnType<typeof readTranscriptSnapshot>): Set<string> {
   const identities = new Set<string>();
@@ -34,11 +36,13 @@ function coverageFrom(dir: string, snapshot: ReturnType<typeof readTranscriptSna
     if (state.version !== 1 || !Array.isArray(state.processedIdentities) || state.processedIdentities.some((id) => typeof id !== "string")) throw new Error(`Invalid state file: ${statePath}`);
     for (const identity of state.processedIdentities) identities.add(identity);
   }
-  const bySource = new Map(snapshot.entries.map((entry) => [`${entry.sessionId}\\0${entry.id}`, entry.identity]));
+  const bySource = new Map(snapshot.entries.map((entry) => [`${entry.sessionId}\0${entry.id}`, entry.identity]));
   const directory = join(dir, "digests");
   if (existsSync(directory)) for (const name of readdirSync(directory)) if (name.endsWith(".md")) {
-    for (const source of readDigest(join(directory, name))?.frontmatter.sources ?? []) for (const id of source.entryIds) {
-      const identity = bySource.get(`${source.sessionId}\\0${id}`);
+    let digest;
+    try { digest = readDigest(join(directory, name)); } catch (error) { console.error(`Skipping invalid digest ${join(directory, name)}: ${(error as Error).message}`); continue; }
+    for (const source of digest?.frontmatter.sources ?? []) for (const id of source.entryIds) {
+      const identity = bySource.get(`${source.sessionId}\0${id}`);
       if (identity) identities.add(identity);
     }
   }
@@ -54,7 +58,7 @@ export function buildPrompt(span: PlannedSpan, context: TranscriptEntry[], prior
   return [
     "Create a concise daily memory from the new transcript entries. Return JSON only with shape {projects:string[],tags:string[],sections:{<exact heading>: [{label:'stated'|'observed'|'inferred',text:string,citations:string[]}]}}.",
     `Include all headings: ${headings.join("; ")}. Cite only source IDs exactly as listed below (session-id/entry-id). Use labels stated for George's explicit claims, observed for transcript/tool evidence, inferred for clearly tentative interpretation. Preserve uncertainty. NEVER infer mental causes or diagnose. Distinguish explored/abandoned approaches from adopted decisions. The source-derived prior context is not new evidence.`,
-    `Required citations: ${sessionPairs.join(", ")}`,
+    `Allowed source IDs: ${sessionPairs.join(", ")}. Each item must cite only IDs that support that item. The stated label applies only to George's own statements, not assistant choices or proposals.`,
     "Revise the existing digest together with the new entries. Return the complete replacement digest, not an append-only update. Existing digest is derived material, not fresh evidence. Context-only entries may aid interpretation but cannot support new claims.",
     "Existing digest (may be corrected; its cited source references remain eligible):", priorBody || "(none)",
     "Prior context (interpretation only):", ...context.map(contextEntry), "New entries:", ...span.entries.map(contextEntry),
@@ -101,29 +105,15 @@ function frontmatter(existing: DigestFrontmatter | undefined, date: string, inco
   return { type: "digest", date, derived: true, projects: [...new Set([...(existing?.projects ?? []), ...projects])], tags: [...new Set([...(existing?.tags ?? []), ...tags])], sources };
 }
 function renderDigest(metadata: DigestFrontmatter, body: string): string { return `---\n${stringify(metadata).trimEnd()}\n---\n\n${body.trim()}\n`; }
-interface LockDiagnostic { path: string; ownerPid: number | null; ownerAlive: boolean | null; removeCommand: string }
 function shellQuote(value: string): string { return `'${value.replaceAll("'", "'\\''")}'`; }
-function lockDiagnostic(path: string): LockDiagnostic | undefined {
+function lockDiagnostic(path: string): string | undefined {
   if (!existsSync(path)) return undefined;
-  let ownerPid: number | null = null;
-  let ownerAlive: boolean | null = null;
+  let ownerPid: number | "unknown" = "unknown";
   try {
-    const data = JSON.parse(readFileSync(path, "utf8")) as { pid?: unknown };
-    if (Number.isInteger(data.pid) && (data.pid as number) > 0) {
-      ownerPid = data.pid as number;
-      try { process.kill(ownerPid, 0); ownerAlive = true; }
-      catch (error) {
-        const code = (error as NodeJS.ErrnoException).code;
-        ownerAlive = code === "EPERM" ? true : code === "ESRCH" ? false : null;
-      }
-    }
-  } catch { /* Unknown/unreadable lock owners are never assumed dead. */ }
-  return { path, ownerPid, ownerAlive, removeCommand: `rm -f -- ${shellQuote(path)}` };
-}
-function lockError(diagnostic: LockDiagnostic): Error {
-  const owner = diagnostic.ownerPid === null ? "unknown owner PID" : `owner PID ${diagnostic.ownerPid}`;
-  const alive = diagnostic.ownerAlive === null ? "alive status unknown" : diagnostic.ownerAlive ? "PID alive" : "PID not alive";
-  return new Error(`Consolidation lock exists at ${diagnostic.path} (${owner}; ${alive}). If the owner is gone, remove it with: ${diagnostic.removeCommand}`);
+    const pid = (JSON.parse(readFileSync(path, "utf8")) as { pid?: unknown }).pid;
+    if (Number.isInteger(pid) && (pid as number) > 0) ownerPid = pid as number;
+  } catch { /* An unreadable lock has an unknown owner. */ }
+  return `Lock exists at ${path} (owner PID ${ownerPid}); remove it if no run is active: rm -f -- ${shellQuote(path)}`;
 }
 function acquireLock(dir: string): () => void {
   const path = join(dir, ".consolidate.lock");
@@ -131,7 +121,7 @@ function acquireLock(dir: string): () => void {
   try { fd = openSync(path, "wx"); }
   catch (error) {
     const diagnostic = lockDiagnostic(path);
-    if (diagnostic) throw lockError(diagnostic);
+    if (diagnostic) throw new Error(diagnostic);
     throw new Error(`Cannot create consolidation lock ${path}`, { cause: error });
   }
   try { writeFileSync(fd, JSON.stringify({ pid: process.pid, createdAt: Date.now() })); }
@@ -143,7 +133,7 @@ function acquireLock(dir: string): () => void {
   return () => rmSync(path, { force: true });
 }
 
-export interface ConsolidationStatus { lastSuccessfulRun: string | null; outstandingNewProcessable: number; deferredUnfinished: number; limitDeferred: number; lock?: LockDiagnostic }
+export interface ConsolidationStatus { lastSuccessfulRun: string | null; outstandingNewProcessable: number; deferredUnfinished: number; limitDeferred: number; lock?: string }
 function readLastSuccessfulRun(dir: string): string | null {
   let lastSuccessfulRun: string | null = null;
   const statePath = join(dir, "state.json");
@@ -152,17 +142,14 @@ function readLastSuccessfulRun(dir: string): string | null {
   }
   return lastSuccessfulRun;
 }
-function statusFrom(snapshot: ReturnType<typeof readTranscriptSnapshot>, coverage: ReadonlySet<string>, maxEntries: number, lastSuccessfulRun: string | null): ConsolidationStatus {
-  const plan = planTranscriptSpans(snapshot, coverage, maxEntries);
-  const allCandidates = planTranscriptSpans(snapshot, coverage, Number.MAX_SAFE_INTEGER);
-  const processableKeys = new Set(allCandidates.spans.flatMap((span) => span.entries.map((entry) => entry.identity)));
-  const deferredKeys = new Set(plan.deferredUnfinished.map((entry) => entry.identity).filter((identity) => !coverage.has(identity) && !processableKeys.has(identity)));
-  return { lastSuccessfulRun, outstandingNewProcessable: plan.processableCount, deferredUnfinished: deferredKeys.size, limitDeferred: plan.limitDeferredCount };
+function statusFrom(plan: SpanPlan, lastSuccessfulRun: string | null): ConsolidationStatus {
+  return { lastSuccessfulRun, outstandingNewProcessable: plan.processableCount, deferredUnfinished: plan.deferredUnfinished.length, limitDeferred: plan.limitDeferredCount };
 }
 export function getConsolidationStatus(options: Pick<ConsolidateOptions, "sessionsDir" | "memoryDir" | "maxEntries"> = {}): ConsolidationStatus {
   const dir = resolveMemoryDir(options.memoryDir);
   const snapshot = readTranscriptSnapshot(options.sessionsDir);
-  const status = statusFrom(snapshot, coverageFrom(dir, snapshot), options.maxEntries ?? 200, readLastSuccessfulRun(dir));
+  const plan = planTranscriptSpans(snapshot, coverageFrom(dir, snapshot), options.maxEntries ?? 200);
+  const status = statusFrom(plan, readLastSuccessfulRun(dir));
   const lock = lockDiagnostic(join(dir, ".consolidate.lock"));
   return lock ? { ...status, lock } : status;
 }
@@ -171,38 +158,58 @@ export function planSummary(plan: SpanPlan): string[] { return plan.spans.map((s
 export async function consolidate(options: ConsolidateOptions = {}): Promise<{ plan: string[]; status: ConsolidationStatus }> {
   const dir = resolveMemoryDir(options.memoryDir);
   const snapshot = readTranscriptSnapshot(options.sessionsDir);
-  const plan = planTranscriptSpans(snapshot, coverageFrom(dir, snapshot), options.maxEntries ?? 200);
-  const summary = planSummary(plan);
-  const existingCoverage = coverageFrom(dir, snapshot);
+  const limit = options.maxEntries ?? 200;
   const lastSuccessfulRun = readLastSuccessfulRun(dir);
-  if (options.dryRun) return { plan: summary, status: statusFrom(snapshot, existingCoverage, options.maxEntries ?? 200, lastSuccessfulRun) };
-  if (!options.model && plan.spans.length) throw new Error("A model adapter is required when new entries are available");
+  if (options.dryRun) {
+    const plan = planTranscriptSpans(snapshot, coverageFrom(dir, snapshot), limit);
+    return { plan: planSummary(plan), status: statusFrom(plan, lastSuccessfulRun) };
+  }
   mkdirSync(dir, { recursive: true });
   const unlock = acquireLock(dir);
+  const handleSignal = () => {
+    process.removeListener("SIGINT", handleSignal);
+    process.removeListener("SIGTERM", handleSignal);
+    unlock();
+    process.exit(1);
+  };
+  process.on("SIGINT", handleSignal);
+  process.on("SIGTERM", handleSignal);
   try {
     mkdirSync(join(dir, "digests"), { recursive: true });
-    // Re-read coverage under lock. Model output for every date is obtained before the first write.
     const currentCoverage = coverageFrom(dir, snapshot);
-    const lockedPlan = planTranscriptSpans(snapshot, currentCoverage, options.maxEntries ?? 200);
+    const plan = planTranscriptSpans(snapshot, currentCoverage, limit);
+    const summary = planSummary(plan);
+    if (!options.model && plan.spans.length) throw new Error("A model adapter is required when new entries are available");
     const prepared = [] as Array<{ date: string; output: DigestOutput; entries: TranscriptEntry[]; prior?: { frontmatter: DigestFrontmatter; body: string } }>;
-    for (const span of lockedPlan.spans) {
-      const prior = readDigest(digestPath(dir, span.date));
-      const raw = await options.model!.consolidate(buildPrompt(span, lockedPlan.context, prior?.body ?? "", prior?.frontmatter.sources.flatMap((source) => source.entryIds.map((entryId) => `${source.sessionId}/${entryId}`)) ?? []));
+    // Validate all target digests before making any model call.
+    const priors = new Map(plan.spans.map((span) => [span.date, readDigest(digestPath(dir, span.date))]));
+    for (const span of plan.spans) {
+      const prior = priors.get(span.date);
+      const raw = await options.model!.consolidate(buildPrompt(span, plan.context, prior?.body ?? "", prior?.frontmatter.sources.flatMap((source) => source.entryIds.map((entryId) => `${source.sessionId}/${entryId}`)) ?? []));
       const output = parseOutput(raw, span, prior?.frontmatter);
       prepared.push({ date: span.date, output, entries: span.entries, ...(prior ? { prior } : {}) });
     }
     for (const item of prepared) {
       const metadata = frontmatter(item.prior?.frontmatter, item.date, item.entries, item.output.projects, item.output.tags);
-      const body = renderItems(item.output);
-      writeAtomic(digestPath(dir, item.date), renderDigest(metadata, body));
+      writeAtomic(digestPath(dir, item.date), renderDigest(metadata, renderItems(item.output)));
       options.afterDigestWrite?.(item.date);
     }
-    const statePath = join(dir, "state.json");
     const resultingCoverage = new Set(currentCoverage);
     for (const item of prepared) for (const entry of item.entries) resultingCoverage.add(entry.identity);
     const state: ConsolidationState = { version: 1, processedIdentities: [...resultingCoverage], lastSuccessfulRun: new Date().toISOString() };
-    const status = statusFrom(snapshot, resultingCoverage, options.maxEntries ?? 200, state.lastSuccessfulRun);
-    writeAtomic(statePath, `${JSON.stringify(state, null, 2)}\n`);
+    const processedCount = prepared.reduce((count, item) => count + item.entries.length, 0);
+    const remainingCount = plan.processableCount - processedCount;
+    const status: ConsolidationStatus = {
+      lastSuccessfulRun: state.lastSuccessfulRun,
+      outstandingNewProcessable: remainingCount,
+      deferredUnfinished: plan.deferredUnfinished.length,
+      limitDeferred: Math.max(0, remainingCount - limit),
+    };
+    writeAtomic(join(dir, "state.json"), `${JSON.stringify(state, null, 2)}\n`);
     return { plan: summary, status };
-  } finally { unlock(); }
+  } finally {
+    process.removeListener("SIGINT", handleSignal);
+    process.removeListener("SIGTERM", handleSignal);
+    unlock();
+  }
 }

@@ -53,7 +53,7 @@ test("deduplicates clone history with content-derived identity without conflatin
   assert.equal(plan.processableCount, 4);
 }));
 
-test("defers unfinished user exchange including assistant toolUse and accepts stop/end_turn completion", () => fixture((directory) => {
+test("defers unfinished user exchange including assistant toolUse and accepts terminal stop reasons", () => fixture((directory) => {
   writeSession(join(directory, "session.jsonl"), [
     row("u1", null, "user", "done"), row("a1", "u1", "assistant", "answer", undefined, "stop"),
     row("u2", "a1", "user", "unfinished"), row("a2", "u2", "assistant", "calling", undefined, "toolUse"),
@@ -61,6 +61,26 @@ test("defers unfinished user exchange including assistant toolUse and accepts st
   const plan = planTranscriptSpans(readTranscriptSnapshot(directory));
   assert.deepEqual(plan.deferredUnfinished.map((entry) => entry.id), ["u2", "a2"]);
   assert.deepEqual(plan.spans.flatMap((span) => span.entries.map((entry) => entry.id)), ["u1", "a1"]);
+}));
+
+test("aborted and error final replies complete their exchanges", () => fixture((directory) => {
+  for (const [reason, userId, assistantId] of [["aborted", "ua", "aa"], ["error", "ue", "ae"], ["length", "ul", "al"]]) {
+    writeSession(join(directory, `${reason}.jsonl`), [row(userId, null, "user", "question"), row(assistantId, userId, "assistant", "partial", undefined, reason)]);
+  }
+  const plan = planTranscriptSpans(readTranscriptSnapshot(directory));
+  assert.equal(plan.deferredUnfinished.length, 0);
+  assert.deepEqual(new Set(plan.spans.flatMap((span) => span.entries.map((entry) => entry.id))), new Set(["ua", "aa", "ue", "ae", "ul", "al"]));
+}));
+
+test("caps array and string conversational content and supports plain-string user content", () => fixture((directory) => {
+  const plain = { type: "message", id: "plain", parentId: null, timestamp: "2026-10-16T10:00:00.000Z", message: { role: "user", content: "plain user message" } };
+  const longArray = row("array", "plain", "assistant", "x".repeat(12_100), undefined, "stop");
+  const longString = { type: "message", id: "string", parentId: "array", timestamp: "2026-10-16T10:02:00.000Z", message: { role: "user", content: "y".repeat(12_100) } };
+  writeSession(join(directory, "session.jsonl"), [plain, longArray, longString]);
+  const entries = readTranscriptSnapshot(directory).entries;
+  assert.equal(entries[0].text, "plain user message");
+  assert.equal(entries[1].text, `${"x".repeat(12_000)}[truncated]`);
+  assert.equal(entries[2].text, `${"y".repeat(12_000)}[truncated]`);
 }));
 
 test("uses per-session ancestry for unfinished status when a fork entry is active elsewhere", () => fixture((directory) => {
@@ -74,8 +94,8 @@ test("uses per-session ancestry for unfinished status when a fork entry is activ
   assert.equal(oldInFork.sessionAbandoned, true);
   const plan = planTranscriptSpans(snapshot);
   assert.deepEqual(plan.spans.flatMap((span) => span.entries.map((entry) => entry.id)), ["u1", "a1"]);
-  assert.equal(plan.deferredUnfinished.some((entry) => entry.id === "u1" && entry.sessionPath.endsWith("fork.jsonl")), true);
-  assert.equal(plan.deferredUnfinished.some((entry) => entry.id === "a2" && entry.sessionPath.endsWith("fork.jsonl")), true);
+  assert.equal(plan.deferredUnfinished.some((entry) => entry.id === "u1"), false);
+  assert.deepEqual(plan.deferredUnfinished.map((entry) => entry.id), ["a2"]);
 }));
 
 test("does not let an abandoned completed assistant finish the active branch's user exchange", () => fixture((directory) => {
@@ -102,7 +122,7 @@ test("carries bounded tool results and only preceding covered ancestry into cont
   ];
   writeSession(join(directory, "session.jsonl"), entries);
   const snapshot = readTranscriptSnapshot(directory);
-  assert.equal(snapshot.sessions[0].sessionId, sessionId);
+  assert.equal(snapshot.entries[0].sessionId, sessionId);
   const result = snapshot.entries.find((entry) => entry.id === "result")!;
   assert.equal(result.text, "");
   assert.equal(result.toolResults[0].length <= 507, true);
@@ -114,7 +134,7 @@ test("carries bounded tool results and only preceding covered ancestry into cont
 }));
 
 test("groups new entries by local day and enforces entry limit even within one exchange", () => fixture((directory) => {
-  const rows = [row("u1", null, "user", "one"), row("a1", "u1", "assistant", "one answer", undefined, "end_turn"), row("u2", "a1", "user", "two"), row("a2", "u2", "assistant", "two answer", undefined, "stop")];
+  const rows = [row("u1", null, "user", "one"), row("a1", "u1", "assistant", "one answer", undefined, "length"), row("u2", "a1", "user", "two"), row("a2", "u2", "assistant", "two answer", undefined, "stop")];
   writeSession(join(directory, "session.jsonl"), rows);
   const plan = planTranscriptSpans(readTranscriptSnapshot(directory), new Set(), 3);
   assert.equal(plan.spans.reduce((sum, span) => sum + span.entries.length, 0), 3);
@@ -158,7 +178,6 @@ test("ignores incomplete final bytes but fails malformed complete lines", () => 
   appendFileSync(path, "{incomplete");
   const snapshot = readTranscriptSnapshot(directory);
   assert.equal(snapshot.entries.length, 1);
-  assert.equal(snapshot.incompleteTailCount, 1);
   writeFileSync(path, "{broken}\n");
   assert.throws(() => readTranscriptSnapshot(directory), /Malformed JSONL/);
 }));
