@@ -131,11 +131,6 @@ export function validateOperations(operations: unknown, index: RecordIndex): ass
     } else throw new Error(`Unknown operation kind: ${(op as { kind?: string }).kind}`);
   }
 }
-function mergeSources(oldSources: RecordSource[], incoming: RecordSource[]): RecordSource[] {
-  const merged = new Map(oldSources.map((source) => [source.sessionId, [...source.entryIds]]));
-  for (const source of incoming) { const ids = merged.get(source.sessionId) ?? []; for (const id of source.entryIds) if (!ids.includes(id)) ids.push(id); merged.set(source.sessionId, ids); }
-  return [...merged].map(([sessionId, entryIds]) => ({ sessionId, entryIds }));
-}
 function dateAppend(body: string, date: string, text: string): string { return `${body}${body.length && !body.endsWith("\n") ? "\n" : ""}${body.length ? "\n" : ""}### ${date}\n${text}\n`; }
 function renderEpisodeSections(sections: Record<string, DigestItem[]>, date: string): string { return headings.filter((heading) => (sections[heading] ?? []).length > 0).map((heading) => `## ${heading}\n${appendOnlyHeadings.has(heading) ? `### ${date}\n` : ""}${sections[heading]!.map((item) => `- **${item.label}** ${item.text} — [${item.citations.join(", ")}]`).join("\n")}`).join("\n\n"); }
 const appendOnlyHeadings = new Set(["Alternatives considered", "Changes of understanding"]);
@@ -153,7 +148,6 @@ function citedSources(items: DigestItem[]): RecordSource[] {
   for (const citation of items.flatMap((item) => item.citations)) { const slash = citation.indexOf("/"), sessionId = citation.slice(0, slash), entryId = citation.slice(slash + 1), ids = grouped.get(sessionId) ?? []; if (!ids.includes(entryId)) ids.push(entryId); grouped.set(sessionId, ids); }
   return [...grouped].map(([sessionId, entryIds]) => ({ sessionId, entryIds }));
 }
-function operationCitations(operation: RecordOperation): DigestItem[] { return operation.kind === "create-episode" ? Object.values(operation.sections).flat() : operation.kind === "update-episode" ? Object.values(operation.sections ?? {}).flat() : operation.kind === "create-commitment" ? [operation.description] : operation.changes.map((change) => ({ label: change.label, text: "", citations: change.citations })); }
 function citedSourcesInBody(body: string): RecordSource[] {
   const citations = [...body.matchAll(/ — \[([^\]\r\n]+)\]$/gm)].flatMap(([, list]) => list!.split(", ").filter((citation) => { const slash = citation.indexOf("/"); return slash > 0 && slash < citation.length - 1; }));
   return citedSources([{ label: "observed", text: "", citations }]);
@@ -172,7 +166,7 @@ function renderFromRaw(index: RecordIndex, operation: RecordOperation, raw: stri
     if (existing) return undefined;
     if (index.occupiedPaths.has(targetPath)) throw new Error(`Create target already exists: ${targetPath}`);
     let metadata: RecordMetadata; let body: string;
-    if (operation.kind === "create-episode") { metadata = { type: "episode", ...operation.fields, id, sources: citedSources(operationCitations(operation)), derived: true }; body = `${renderEpisodeSections(operation.sections, operation.fields.started)}\n`; }
+    if (operation.kind === "create-episode") { metadata = { type: "episode", ...operation.fields, id, sources: citedSources(Object.values(operation.sections).flat()), derived: true }; body = `${renderEpisodeSections(operation.sections, operation.fields.started)}\n`; }
     else {
       metadata = { type: "commitment", ...operation.fields, id, derived: true, sources: citedSources([operation.description]) };
       body = `## Description\n- **${operation.description.label}** ${operation.description.text} — [${operation.description.citations.join(", ")}]\n\n## History\n### ${operation.fields.created}\ncreated (**${operation.description.label}**) — [${operation.description.citations.join(", ")}]\n`;
@@ -199,8 +193,8 @@ function renderFromRaw(index: RecordIndex, operation: RecordOperation, raw: stri
     });
     for (const change of changes) { if (change.value === null) split.doc.delete(change.field); else split.doc.set(change.field, change.value); }
     if (!changes.length) throw new Error(`No-op update rejected: ${id}`);
-    split.doc.set("updated", operation.updated); split.doc.set("sources", mergeSources((current as Commitment).sources, citedSources(changes.map((change) => ({ label: change.label, text: "", citations: change.citations })))));
-    body = dateAppend(body, operation.updated, changes.map(changeLine).join("\n"));
+    split.doc.set("updated", operation.updated);
+    body = dateAppend(body, operation.updated, changes.map(changeLine).join("\n")); split.doc.set("sources", citedSourcesInBody(body));
   }
   return { path: targetPath, content: serialize(split.doc, body.endsWith("\n") ? body : `${body}\n`) };
 }

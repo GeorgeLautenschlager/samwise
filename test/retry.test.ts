@@ -33,13 +33,14 @@ test("provides source timestamps and accepts due dates relative to the span date
   const record = readFileSync(join(memory, "commitments", readdirSync(join(memory, "commitments"))[0]), "utf8");
   assert.match(record, /due: 2026-10-17/);
 }));
-test("retries a validation error once with detailed untrusted response feedback", () => fixture(async (sessions, memory) => {
+test("retries a validation error once with the validation error only", () => fixture(async (sessions, memory) => {
   const prompts: string[] = [];
   const model: ModelAdapter = { async consolidate(prompt) { prompts.push(prompt); return prompts.length === 1 ? output("session/id") : output("s-1/u1"); } };
   await consolidate({ sessionsDir: sessions, memoryDir: memory, model });
   assert.equal(prompts.length, 2);
   assert.match(prompts[1], /invalid item\/citation in Work undertaken item 1: unknown citation "session\/id"/i);
-  assert.match(prompts[1], /Previous response \(untrusted\)/);
+  assert.match(prompts[1], /Validation error:/);
+  assert.doesNotMatch(prompts[1], /Previous response/);
   assert.equal(readFileSync(join(memory, "digests", "2026-10-16.md"), "utf8").includes("session/id"), false);
   assert.equal(JSON.parse(readFileSync(join(memory, "state.json"), "utf8")).processedIdentities.length, 2);
 }));
@@ -93,11 +94,46 @@ test("invalid record targets use ordinary validation retry and leave prior outpu
     assert.equal(existsSync(join(memory, ".pending-consolidation.json")), false);
   });
 });
-test("provider errors are not retried", () => fixture(async (sessions, memory) => {
+test("retries plain stream-aborted and request-timed-out errors once per span", async () => {
+  for (const message of ["Stream aborted", "request timed out", "Configured model did not complete normally (aborted)"]) await fixture(async (sessions, memory) => {
+    let calls = 0;
+    const model: ModelAdapter = { async consolidate() { if (++calls === 1) throw new Error(message); return output("s-1/u1"); } };
+    await consolidate({ sessionsDir: sessions, memoryDir: memory, model });
+    assert.equal(calls, 2);
+  });
+});
+test("exhausted transient provider retry fails after two calls", () => fixture(async (sessions, memory) => {
+  let calls = 0;
+  const model: ModelAdapter = { async consolidate() { calls++; throw Object.assign(new Error("aborted"), { name: "AbortError" }); } };
+  await assert.rejects(consolidate({ sessionsDir: sessions, memoryDir: memory, model }), /aborted/);
+  assert.equal(calls, 2);
+}));
+test("nontransient provider errors are not retried", () => fixture(async (sessions, memory) => {
   let calls = 0;
   const model: ModelAdapter = { async consolidate() { calls++; throw new Error("provider unavailable"); } };
   await assert.rejects(consolidate({ sessionsDir: sessions, memoryDir: memory, model }), /provider unavailable/);
   assert.equal(calls, 1);
+}));
+test("provider and validation retries are independently bounded in provider-then-validation order", () => fixture(async (sessions, memory) => {
+  let calls = 0;
+  const model: ModelAdapter = { async consolidate() {
+    calls++;
+    if (calls === 1) throw new Error("stream aborted");
+    return calls === 2 ? output("bad/id") : output("s-1/u1");
+  } };
+  await consolidate({ sessionsDir: sessions, memoryDir: memory, model });
+  assert.equal(calls, 3);
+}));
+test("provider and validation retries are independently bounded in validation-then-provider order", () => fixture(async (sessions, memory) => {
+  let calls = 0;
+  const model: ModelAdapter = { async consolidate() {
+    calls++;
+    if (calls === 1) return output("bad/id");
+    if (calls === 2) throw new Error("request timed out");
+    return output("s-1/u1");
+  } };
+  await consolidate({ sessionsDir: sessions, memoryDir: memory, model });
+  assert.equal(calls, 3);
 }));
 test("malformed JSON gets one validation retry", () => fixture(async (sessions, memory) => {
   let calls = 0;

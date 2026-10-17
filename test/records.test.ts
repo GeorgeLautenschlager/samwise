@@ -51,7 +51,7 @@ test("citation provenance ignores brackets and Markdown links in retained text",
 test("commitment request can be accepted, blocked, and completed with cited history; hand edits survive", () => sandbox((dir) => {
   applyOperation(dir, commitmentCreate(), loadRecordIndex(dir), writer);
   const record = [...loadRecordIndex(dir).commitments.values()][0]!; const id = record.metadata.id;
-  let raw = readFileSync(record.path, "utf8").replace("## Description", "## Description\nHuman comment: keep this"); writeFileSync(record.path, raw);
+  let raw = readFileSync(record.path, "utf8").replace("sessionId: session-a", "sessionId: stale-span").replace("## Description", "## Description\nHuman comment: keep this"); writeFileSync(record.path, raw);
   const stages: Array<[string, Partial<{ kind: string; status: string }>, string]> = [
     ["2026-04-11", { kind: "commitment" }, "kind: commitment"], ["2026-04-12", { status: "blocked" }, "blocked"], ["2026-04-13", { status: "done" }, "done"],
   ];
@@ -62,6 +62,7 @@ test("commitment request can be accepted, blocked, and completed with cited hist
   const final = loadRecordIndex(dir).commitments.get(id)!; assert.equal(final.metadata.kind, "commitment"); assert.equal(final.metadata.status, "done");
   assert.match(final.body, /Human comment: keep this/); assert.match(final.body, /status: blocked/); assert.match(final.body, /status: done/);
   assert.equal((final.body.match(/^created /gm) ?? []).length, 1); assert.doesNotMatch(final.body, /title:|owner:|requested_by:|due: null/);
+  assert.deepEqual(final.metadata.sources, [{ sessionId: "session-a", entryIds: ["e1"] }, { sessionId: "session-b", entryIds: ["e3"] }]);
 }));
 
 test("commitment projects update and null optional fields clear YAML metadata", () => sandbox((dir) => {

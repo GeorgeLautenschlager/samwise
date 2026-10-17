@@ -157,17 +157,17 @@ export function readTranscriptSnapshot(directory?: string): TranscriptSnapshot {
 export interface PlannedSpan {
   date: string;
   entries: TranscriptEntry[];
+  context: TranscriptEntry[];
 }
 
 export interface SpanPlan {
   spans: PlannedSpan[];
-  context: TranscriptEntry[];
   deferredUnfinished: TranscriptEntry[];
   processableCount: number;
   limitDeferredCount: number;
 }
 
-export function planTranscriptSpans(snapshot: TranscriptSnapshot, coveredEntryKeys: ReadonlySet<string> = new Set(), limit = 200): SpanPlan {
+export function planTranscriptSpans(snapshot: TranscriptSnapshot, coveredEntryKeys: ReadonlySet<string> = new Set(), limit = 80): SpanPlan {
   if (!Number.isInteger(limit) || limit < 1) throw new RangeError("limit must be a positive integer");
   const entries = snapshot.entries;
   const deferredUnfinished: TranscriptEntry[] = [];
@@ -192,14 +192,12 @@ export function planTranscriptSpans(snapshot: TranscriptSnapshot, coveredEntryKe
   const deferred = deferredUnfinished.filter((entry) => !coveredEntryKeys.has(entry.identity) && !availableByIdentity.has(entry.identity));
   const candidates = available.filter((entry) => !coveredEntryKeys.has(entry.identity));
   const selected = candidates.slice(0, limit);
-  const contexts: TranscriptEntry[] = [];
-  const bySessionId = new Map<string, TranscriptEntry[]>();
+  const bySessionId = new Map<string, TranscriptEntry[]>(), spans = new Map<string, PlannedSpan>();
   for (const entry of entries) {
     const session = bySessionId.get(entry.sessionPath) ?? [];
     session.push(entry);
     bySessionId.set(entry.sessionPath, session);
   }
-  const contextIdentities = new Set<string>();
   for (const selectedEntry of selected) {
     const ancestry: TranscriptEntry[] = [];
     const session = bySessionId.get(selectedEntry.sessionPath) ?? [];
@@ -210,21 +208,13 @@ export function planTranscriptSpans(snapshot: TranscriptSnapshot, coveredEntryKe
       if (isProcessable(parent) && coveredEntryKeys.has(parent.identity)) ancestry.push(parent);
       parentId = parent.parentId;
     }
-    for (const parent of ancestry.reverse().slice(-8)) if (!contextIdentities.has(parent.identity)) {
-      contexts.push(parent);
-      contextIdentities.add(parent.identity);
-    }
-  }
-  const spans = new Map<string, TranscriptEntry[]>();
-  for (const entry of selected) {
-    const date = localDate(entry.timestamp);
-    const group = spans.get(date) ?? [];
-    group.push(entry);
-    spans.set(date, group);
+    const date = localDate(selectedEntry.timestamp), span = spans.get(date) ?? { date, entries: [], context: [] };
+    span.entries.push(selectedEntry);
+    for (const parent of ancestry.reverse().slice(-8)) if (!span.context.some((context) => context.identity === parent.identity)) span.context.push(parent);
+    spans.set(date, span);
   }
   return {
-    spans: [...spans].map(([date, spanEntries]) => ({ date, entries: spanEntries })),
-    context: contexts,
+    spans: [...spans.values()],
     deferredUnfinished: [...new Map(deferred.map((entry) => [entry.identity, entry])).values()],
     processableCount: candidates.length,
     limitDeferredCount: candidates.length - selected.length,

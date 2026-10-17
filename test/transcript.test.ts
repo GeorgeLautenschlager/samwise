@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { planTranscriptSpans, readTranscriptSnapshot } from "../src/transcript.ts";
+import { buildPrompt } from "../src/consolidator.ts";
 
 function fixture(run: (directory: string) => void): void {
   const directory = mkdtempSync(join(tmpdir(), "samwise-transcript-"));
@@ -129,8 +130,33 @@ test("carries bounded tool results and only preceding covered ancestry into cont
   assert.equal("raw" in result, false);
   const covered = new Set(snapshot.entries.filter((entry) => ["u1", "call", "result", "answer", "future", "unrelated"].includes(entry.id)).map((entry) => entry.identity));
   const plan = planTranscriptSpans(snapshot, covered, 1);
-  assert.deepEqual(plan.context.map((entry) => entry.id), ["u1", "call", "result", "answer", "future"]);
-  assert.equal(plan.context.some((entry) => entry.id === "unrelated"), false);
+  assert.deepEqual(plan.spans[0].context.map((entry) => entry.id), ["u1", "call", "result", "answer", "future"]);
+  assert.equal(plan.spans[0].context.some((entry) => entry.id === "unrelated"), false);
+}));
+
+test("keeps ancestry contexts distinct for spans on different dates", () => fixture((directory) => {
+  for (const [name, prefix, day] of [["a", "A", "16"], ["b", "B", "17"]]) writeSession(join(directory, `${name}.jsonl`), [
+    row(`${prefix}-old-user`, null, "user", `${prefix} prior`, "2026-10-15T10:00:00.000Z"),
+    row(`${prefix}-old-answer`, `${prefix}-old-user`, "assistant", `${prefix} prior answer`, "2026-10-15T10:01:00.000Z", "stop"),
+    row(`${prefix}-new-user`, `${prefix}-old-answer`, "user", `${prefix} new`, `2026-10-${day}T10:00:00.000Z`),
+    row(`${prefix}-new-answer`, `${prefix}-new-user`, "assistant", `${prefix} answer`, `2026-10-${day}T10:01:00.000Z`, "stop"),
+  ]);
+  const snapshot = readTranscriptSnapshot(directory), covered = new Set(snapshot.entries.filter((entry) => entry.timestamp.startsWith("2026-10-15")).map((entry) => entry.identity));
+  const plan = planTranscriptSpans(snapshot, covered);
+  assert.equal(plan.spans.length, 2);
+  assert.deepEqual(plan.spans.map((span) => span.context.map((entry) => entry.id)), [["A-old-user", "A-old-answer"], ["B-old-user", "B-old-answer"]]);
+}));
+
+test("context prompt caps prior entries as valid JSON but preserves full new entry text", () => fixture((directory) => {
+  writeSession(join(directory, "session.jsonl"), [row("u1", null, "user", "x".repeat(5_000)), row("a1", "u1", "assistant", "answer", undefined, "stop")]);
+  const span = planTranscriptSpans(readTranscriptSnapshot(directory)).spans[0];
+  const prompt = buildPrompt(span, [span.entries[0]!]), instructions = prompt.split("Existing digest")[0]!;
+  for (const heading of ["Work undertaken", "Outcomes", "Significant decisions", "Changes of plan and interruptions", "Carry-forward items"]) assert.equal(instructions.split(heading).length - 1, 1, `${heading} appears once`);
+  const prior = prompt.split("Prior context (interpretation only):\n")[1]!.split("\nNew entries:")[0]!;
+  const next = prompt.split("\nNew entries:\n")[1]!;
+  assert.ok(prior.length <= 2_000);
+  assert.doesNotThrow(() => JSON.parse(prior));
+  assert.ok(next.includes("x".repeat(4_900)));
 }));
 
 test("groups new entries by local day and enforces entry limit even within one exchange", () => fixture((directory) => {
