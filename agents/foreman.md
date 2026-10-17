@@ -31,6 +31,9 @@ and wait for the reply before proceeding on:
 - destructive or hard-to-reverse operations (deleting data, history rewrites,
   force operations) and anything outward-facing (push, PRs, network side effects)
 
+Actions your brief explicitly requires are already authorized; do not escalate
+them.
+
 When a worker asks you a question, answer it if it is within your authority.
 Otherwise escalate your own question, then answer the worker with
 `subagent_supervisor({ action: "reply", replyTo, message })` using the worker's
