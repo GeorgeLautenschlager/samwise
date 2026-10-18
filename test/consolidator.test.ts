@@ -41,15 +41,37 @@ test("successful consolidation reports the number of processed transcript entrie
   assert.equal(result.processedEntries, 2);
 }));
 
-test("prompt requires source IDs to be copied verbatim with their separator", async () => fixture(async (_root, sessions, memory) => {
+test("prompt asks for bare entry IDs and stores bare-id citations in the existing full format", async () => fixture(async (_root, sessions, memory) => {
   const sessionId = "01a144e8-9cd4-767e-afb1-4ef6ae5e486d";
   const entryId = "a5f3fa23";
   mkdirSync(sessions, { recursive: true });
   writeFileSync(join(sessions, "session.jsonl"), `${JSON.stringify({ type: "session", id: sessionId })}\n${JSON.stringify(row(entryId, null, "user", "Record this activity"))}\n${JSON.stringify(row("assistant-entry", entryId, "assistant", "Recorded", undefined, "stop"))}\n`);
   let prompt = "";
   await consolidate({ sessionsDir: sessions, memoryDir: memory, model: validModel((value) => { prompt = value; }) });
-  assert.ok(prompt.includes(`${sessionId}/${entryId}`));
-  assert.ok(prompt.includes('Copy each cited source ID exactly as written, byte-for-byte, including the "/" separator; never shorten, reconstruct, or combine ID components.'));
+  assert.ok(prompt.includes(`"source":"${entryId}"`));
+  assert.ok(prompt.includes(`Allowed citation IDs (bare entry IDs): ${entryId}, assistant-entry`));
+  assert.doesNotMatch(prompt, new RegExp(`"source":"${sessionId}/`));
+  assert.match(readFileSync(join(memory, "digests", "2026-10-16.md"), "utf8"), new RegExp(`${sessionId}/assistant-entry`));
+}));
+
+test("full session/entry citations remain accepted", async () => fixture(async (_root, sessions, memory) => {
+  writeSession(sessions, [row("u1", null, "user", "first"), row("a1", "u1", "assistant", "done", undefined, "stop")]);
+  const sections = Object.fromEntries(["Work undertaken", "Outcomes", "Significant decisions", "Changes of plan and interruptions", "Carry-forward items"].map((heading) => [heading, [{ label: "observed", text: "Recorded", citations: ["s-1/u1"] }]]));
+  await consolidate({ sessionsDir: sessions, memoryDir: memory, model: { async consolidate() { return JSON.stringify({ digest: { projects: [], tags: [], sections }, operations: [] }); } } });
+  assert.match(readFileSync(join(memory, "digests", "2026-10-16.md"), "utf8"), /s-1\/u1/);
+}));
+
+test("unknown citation IDs are rejected", async () => fixture(async (_root, sessions, memory) => {
+  writeSession(sessions, [row("u1", null, "user", "first"), row("a1", "u1", "assistant", "done", undefined, "stop")]);
+  const sections = Object.fromEntries(["Work undertaken", "Outcomes", "Significant decisions", "Changes of plan and interruptions", "Carry-forward items"].map((heading) => [heading, [{ label: "observed", text: "Recorded", citations: ["not-real"] }]]));
+  await assert.rejects(consolidate({ sessionsDir: sessions, memoryDir: memory, model: { async consolidate() { return JSON.stringify({ digest: { projects: [], tags: [], sections }, operations: [] }); } } }), /unknown citation "not-real"/);
+}));
+
+test("ambiguous bare citation IDs across sessions are rejected", async () => fixture(async (_root, sessions, memory) => {
+  mkdirSync(sessions, { recursive: true });
+  for (const sessionId of ["first", "second"]) writeFileSync(join(sessions, `${sessionId}.jsonl`), `${JSON.stringify({ type: "session", id: sessionId })}\n${JSON.stringify(row("u1", null, "user", `first ${sessionId}`))}\n${JSON.stringify(row(`${sessionId}-a`, "u1", "assistant", `done ${sessionId}`, undefined, "stop"))}\n`);
+  const sections = Object.fromEntries(["Work undertaken", "Outcomes", "Significant decisions", "Changes of plan and interruptions", "Carry-forward items"].map((heading) => [heading, [{ label: "observed", text: "Recorded", citations: ["u1"] }]]));
+  await assert.rejects(consolidate({ sessionsDir: sessions, memoryDir: memory, model: { async consolidate() { return JSON.stringify({ digest: { projects: [], tags: [], sections }, operations: [] }); } } }), /ambiguous bare citation "u1" matches multiple eligible entries/);
 }));
 
 test("same-day limited runs revise one digest and extend plain sources", async () => fixture(async (_root, sessions, memory) => {
@@ -158,7 +180,7 @@ test("plain digest sources recover a crash before state and process only remaini
   const prompts: string[] = [];
   await consolidate({ sessionsDir: sessions, memoryDir: memory, maxEntries: 2, model: validModel((prompt) => prompts.push(prompt)) });
   assert.equal(prompts.length, 1);
-  assert.match(prompts[0], /"source":"s-1\/u2"/);
+  assert.match(prompts[0], /"source":"u2"/);
   const front = metadata(join(memory, "digests", "2026-10-16.md"));
   assert.deepEqual(front.sources, [{ sessionId: "s-1", entryIds: ["u1", "a1", "u2", "a2"] }]);
   assert.deepEqual(Object.keys(JSON.parse(readFileSync(join(memory, "state.json"), "utf8"))).sort(), ["lastSuccessfulRun", "processedIdentities", "version"]);
@@ -205,8 +227,8 @@ test("crash recovery deduplicates cloned entries after parent rewiring and dropp
   const prompts: string[] = [];
   await consolidate({ sessionsDir: sessions, memoryDir: memory, model: validModel((prompt) => prompts.push(prompt)) });
   assert.equal(prompts.length, 1);
-  assert.match(prompts[0], /"source":"original\/u2"/);
-  assert.doesNotMatch(prompts[0], /"source":"clone\/(?:u1|a1)"/);
+  assert.match(prompts[0], /"source":"u2"/);
+  assert.doesNotMatch(prompts[0], /"source":"clone\//);
   assert.deepEqual(metadata(join(memory, "digests", "2026-10-16.md")).sources, [{ sessionId: "original", entryIds: ["u1", "a1", "u2", "a2"] }]);
 }));
 
@@ -220,7 +242,7 @@ test("multi-day span journals recover an interrupted write before state", async 
   const prompts: string[] = [];
   await consolidate({ sessionsDir: sessions, memoryDir: memory, model: validModel((prompt) => prompts.push(prompt)) });
   assert.equal(prompts.length, 1);
-  assert.match(prompts[0], /"source":"s-1\/u2"/);
+  assert.match(prompts[0], /"source":"u2"/);
   assert.equal(existsSync(join(memory, "digests", "2026-10-16.md")), true);
   assert.equal(existsSync(join(memory, "state.json")), true);
 }));
@@ -404,7 +426,7 @@ test("prompt preserves provenance, labels, abandoned exploration, and tool detai
   let prompt = "";
   await consolidate({ sessionsDir: sessions, memoryDir: memory, model: validModel((value) => { prompt = value; }) });
   assert.match(prompt, /Preserve uncertainty/);
-  assert.match(prompt, /session-id\/entry-id/);
+  assert.match(prompt, /Allowed citation IDs \(bare entry IDs\)/);
   assert.match(prompt, /shell/);
   assert.match(prompt, /observed result/);
   assert.match(prompt, /abandoned exploration/);

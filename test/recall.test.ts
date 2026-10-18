@@ -24,6 +24,8 @@ test("recall filters, ranks by score, bounds results, and returns original excer
     fixture(root, "commitment", "one.md", "title: Garden task\nstatus: blocked\nupdated: 2025-02-04\nprojects: [Alpha]", "## Description\n- garden task.");
     fixture(root, "commitment", "open.md", "title: Open commitment\nstatus: open\nupdated: 2025-02-05", "## Description\n- follow up.");
     fixture(root, "commitment", "old-open.md", "title: Old commitment\nstatus: open\nupdated: 2024-01-01", "## Description\n- archived.");
+    fixture(root, "commitment", "in-progress.md", "title: In progress commitment\nstatus: in-progress\nupdated: 2025-02-06", "## Description\n- follow through.");
+    fixture(root, "commitment", "deferred.md", "title: Deferred commitment\nstatus: deferred\nupdated: 2025-02-07", "## Description\n- revisit later.");
     fixture(root, "digest", "wrong-type.md", "type: episode\ndate: 2025-03-01", "garden plan");
     writeFileSync(join(root, "digests", "malformed.md"), "---\ntype: [broken\n---\ngarden plan");
     const large = "x".repeat(20_000);
@@ -42,6 +44,9 @@ test("recall filters, ranks by score, bounds results, and returns original excer
     assert.match(ranked[0]?.note ?? "", /not fresh evidence/i);
     assert.ok(ranked.every((item) => item.excerpt.length <= 180 && item.path.length <= 240));
     assert.ok(recall("", { type: "commitment", status: "open" }, 10, root).some((item) => item.titleOrDate === "Open commitment"));
+    const nonterminalStatuses = ["open", "in-progress", "blocked", "deferred"];
+    assert.deepEqual(recall("", { type: "commitment", status: nonterminalStatuses }, 10, root).map((item) => item.titleOrDate).sort(), ["Deferred commitment", "Garden task", "In progress commitment", "Open commitment", "Old commitment"].sort());
+    assert.deepEqual(recall("", { type: "commitment", status: "open, in-progress, blocked, deferred" }, 10, root).map((item) => item.titleOrDate).sort(), ["Deferred commitment", "Garden task", "In progress commitment", "Open commitment", "Old commitment"].sort());
     assert.equal(recall("", { type: "commitment", status: "open", to: "2024-12-31" }, 10, root).length, 1);
     assert.equal(recall("", { type: "commitment", status: "open", from: "2025-01-01" }, 10, root).length, 1);
     assert.equal(recall("garden plan", { type: "digest", from: "2025-03-01" }, 10, root).some((item) => item.path.includes("wrong-type") || item.path.includes("malformed")), false);

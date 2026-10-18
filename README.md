@@ -4,9 +4,9 @@ Samwise adds local memory recall and consolidation to Pi. This package provides 
 
 ## Install and start
 
-Run `./install.sh` from this checkout. It installs dependencies, merges package settings into `~/.pi/agent/settings.json` with a timestamped backup before changes, registers the source package in `~/Samwise/.pi/settings.json`, and creates `~/.samwise/memory`. Open Pi in the project with `cd ~/Samwise && pi`; trust `~/Samwise` when Pi asks. The project package settings—not global settings—enable the extension and agent. `./uninstall.sh` removes only its matching package registration/config values and its own matching `SYSTEM.md` symlink; backups are retained for manual restore, and any user-edited config values are reported for review.
+Run `./install.sh` from this checkout. It installs dependencies, merges package settings into `~/.pi/agent/settings.json` with a timestamped backup before changes, registers the source package in `~/Samwise/.pi/settings.json`, and creates `~/.samwise/memory`. Open Pi in the project with `cd ~/Samwise && pi`; trust `~/Samwise` when Pi asks. The project package settings—not global settings—enable the extension and agent. `./uninstall.sh` removes only the project-scope package registration it created and its own matching `SYSTEM.md` symlink. It deliberately leaves global `~/.pi/agent/settings.json` untouched because it cannot distinguish settings it added from settings George already had.
 
-George supplies `home/SYSTEM.md` (not included by this package). If present, installation links it to `~/Samwise/.pi/SYSTEM.md`, Pi's full-replacement prompt path; the root `~/Samwise/SYSTEM.md` is not loaded. Installation leaves any existing non-matching file or symlink untouched. If the supplied file is absent, installation clearly skips the link; re-run install after supplying it.
+George supplies `home/SYSTEM.md`. If present, installation links it to `~/Samwise/.pi/SYSTEM.md`, Pi's full-replacement prompt path; the root `~/Samwise/SYSTEM.md` is not loaded. Installation leaves any existing non-matching file or symlink untouched. If the supplied file is absent, installation clearly skips the link; re-run install after supplying it.
 
 Pi-web is the existing external UI `@jmfederico/pi-web`: open/register `~/Samwise`, trust it, and start a session using the same commands and tools. This package does not launch Pi-web.
 
@@ -16,9 +16,7 @@ Recall example: query ``, scope `{ "type": "commitment", "status": "open" }`. Em
 
 The default sessions folder is derived by `src/sessions.ts` from the encoded absolute `~/Samwise` project path under `~/.pi/agent/sessions`; the CLI `--sessions-dir` overrides it. The memory directory follows the same explicit override / `SAMWISE_MEMORY_DIR` / `~/.samwise/memory` precedence. Project-local trusted package discovery is supported by Pi's package loader; `pi-subagents` discovers project agents from `~/Samwise/.pi/settings.json`.
 
-The packaged Foreman advertises itself for discovery. A pre-existing custom `~/.pi/agent/agents/foreman.md` takes precedence; install warns rather than overwriting it. Reconcile or remove that custom copy manually if you want the package agent. A byte-identical package copy may be removed during installation; restore it manually if desired.
-
-## Memory behavior
+The packaged Foreman advertises itself for discovery. A pre-existing custom `~/.pi/agent/agents/foreman.md` takes precedence over the packaged agent; remove that custom copy manually if you want the package agent.
 
 ## Setup
 

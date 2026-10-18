@@ -4,7 +4,7 @@ import { parseDocument } from "yaml";
 import { resolveMemoryDir } from "./consolidator.ts";
 
 export type MemoryType = "digest" | "episode" | "commitment";
-export interface RecallScope { type?: MemoryType; project?: string; status?: string; from?: string; to?: string }
+export interface RecallScope { type?: MemoryType; project?: string; status?: string | string[]; from?: string; to?: string }
 export interface RecallResult { path: string; type: MemoryType; titleOrDate: string; excerpt: string; sources: string[]; derived: true; note: string }
 const MAX_RESULTS = 20;
 const MAX_EXCERPT = 180;
@@ -56,7 +56,8 @@ export function recall(query: string, scope: RecallScope = {}, limit = 5, memory
     if (meta.type !== type) continue;
     const projects = strings(meta.projects);
     if (scope.project && !projects.some((project) => project.toLocaleLowerCase() === scope.project!.toLocaleLowerCase())) continue;
-    if (scope.status && String(meta.status ?? "").toLocaleLowerCase() !== scope.status.toLocaleLowerCase()) continue;
+    const statuses = Array.isArray(scope.status) ? scope.status : typeof scope.status === "string" ? scope.status.split(",").map((status) => status.trim()).filter(Boolean) : [];
+    if (statuses.length > 0 && !statuses.some((status) => String(meta.status ?? "").toLocaleLowerCase() === status.toLocaleLowerCase())) continue;
     const date = dateFor(meta);
     if (scope.from && (!date || date < scope.from)) continue;
     if (scope.to && (!date || date > scope.to)) continue;

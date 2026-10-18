@@ -49,22 +49,21 @@ test('install and uninstall isolate project registration and preserve user data'
     assert.ok(!fs.lstatSync(projectPi).isSymbolicLink());
     const projectSettings = JSON.parse(fs.readFileSync(path.join(projectPi, 'settings.json'), 'utf8'));
     assert.deepEqual(projectSettings.packages, [{ source: fs.realpathSync(repo) }]);
-    assert.equal(fs.existsSync(path.join(pi, 'settings.json')), false);
+    const globalSettingsAfterInstall = JSON.parse(fs.readFileSync(path.join(agent, 'settings.json'), 'utf8'));
+    assert.equal(Array.isArray(globalSettingsAfterInstall.packages) && globalSettingsAfterInstall.packages.some((entry: any) => (typeof entry === 'string' ? path.resolve(home, entry) : path.resolve(entry.source)) === fs.realpathSync(repo)), false);
     assert.equal(fs.readlinkSync(path.join(projectPi, 'SYSTEM.md')), fs.realpathSync(path.join(repo, 'home/SYSTEM.md')));
     assert.ok(fs.readdirSync(agent).some((name) => name.includes('.samwise-') && name.endsWith('.bak')));
-    assert.equal(fs.existsSync(path.join(agent, 'agents/foreman.md')), false);
+    assert.equal(fs.readFileSync(path.join(agent, 'agents/foreman.md'), 'utf8'), fs.readFileSync(path.join(repo, 'agents/foreman.md'), 'utf8'));
 
     const settingsFile = path.join(agent, 'settings.json');
     const installed = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
     installed.subagents.agentOverrides.foreman.model = 'custom/model';
     fs.writeFileSync(settingsFile, JSON.stringify(installed));
+    const globalBeforeUninstall = fs.readFileSync(settingsFile);
     const uninstall = spawnSync('node', [path.join(repo, 'lib/install-helper.js'), 'uninstall', fs.realpathSync(repo)], { env: { ...process.env, HOME: home }, encoding: 'utf8' });
     assert.equal(uninstall.status, 0, uninstall.stderr);
-    assert.match(uninstall.stderr, /Leaving changed setting/);
-    const after = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
-    assert.deepEqual(after.unrelated, { keep: true });
-    assert.deepEqual(after.shared, { original: 1 });
-    assert.equal(after.subagents.agentOverrides.foreman.model, 'custom/model');
+    assert.match(uninstall.stdout, /settings\.json was left untouched/);
+    assert.deepEqual(fs.readFileSync(settingsFile), globalBeforeUninstall);
     assert.equal(fs.existsSync(path.join(projectPi, 'settings.json')), false);
     assert.equal(fs.existsSync(path.join(projectPi, 'SYSTEM.md')), false);
     assert.equal(fs.readFileSync(path.join(agent, 'auth.json'), 'utf8'), 'auth sentinel');

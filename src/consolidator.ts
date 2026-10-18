@@ -50,7 +50,7 @@ function coverageFrom(dir: string, snapshot: ReturnType<typeof readTranscriptSna
 }
 
 function contextEntry(entry: TranscriptEntry, bounded = false): string {
-  const value = { source: `${entry.sessionId}/${entry.id}`, timestamp: entry.timestamp, role: entry.role, text: entry.text, toolCalls: [...entry.toolCalls], toolResults: [...entry.toolResults], branch: entry.abandoned ? "abandoned exploration (not adopted unless explicitly stated)" : "active" };
+  const value = { source: entry.id, timestamp: entry.timestamp, role: entry.role, text: entry.text, toolCalls: [...entry.toolCalls], toolResults: [...entry.toolResults], branch: entry.abandoned ? "abandoned exploration (not adopted unless explicitly stated)" : "active" };
   if (!bounded) return JSON.stringify(value);
   let rendered = JSON.stringify(value);
   if (rendered.length > 2_000) {
@@ -62,15 +62,14 @@ function contextEntry(entry: TranscriptEntry, bounded = false): string {
   while (rendered.length > 2_000 && value.toolCalls.length) { value.toolCalls.pop(); rendered = JSON.stringify(value); }
   return rendered;
 }
-export function buildPrompt(span: PlannedSpan, context: TranscriptEntry[], priorBody = "", priorSources: string[] = [], records = { commitments: [], episodes: [] } as ReturnType<typeof buildRecordContext>): string {
-  const sessionPairs = [...new Set([...priorSources, ...span.entries.map((entry) => `${entry.sessionId}/${entry.id}`)])];
+export function buildPrompt(span: PlannedSpan, context: TranscriptEntry[], priorBody = "", records = { commitments: [], episodes: [] } as ReturnType<typeof buildRecordContext>): string {
   return [
     `Processing span local date: ${span.date}. Resolve relative due dates against the supplied local span day of the cited entry, not the current wall-clock date. Include due only as YYYY-MM-DD when unambiguous; omit it when ambiguous.`,
     `Return one strict JSON object: {digest:{projects:string[],tags:string[],sections:{<exact heading>:DigestItem[]}},operations:[...]}. No extra envelope keys. Digest headings are exactly ${headings.join(", ")}; every heading maps to a DigestItem array. DigestItem is {label:'stated'|'observed'|'inferred',text:string,citations:string[]}.`,
     `Operations: create-episode {kind:'create-episode',localKey,fields:{title,status:'open'|'resolved'|'abandoned',projects,tags},sections:Record<episode heading,DigestItem[]>}; update-episode {kind:'update-episode',id,fields?:{title,status,projects,tags},sections?:Record<episode heading,DigestItem[]>}; create-commitment {kind:'create-commitment',localKey,fields:{title,kind:'request'|'commitment',owner,requested_by,due?,status:'open'|'in-progress'|'blocked'|'deferred'|'done'|'cancelled',blocked_on?,depends_on?,next_action,projects},description:DigestItem}; owner is the actor who must act. George asking you/Samwise to do something means owner='Samwise', requested_by='George'. Your agreement to do it means kind='commitment', not kind='request'. George asking you to consider something without your agreement is kind='request'. requested_by is the request originator. update-commitment {kind:'update-commitment',id,changes:[{field,value,label,citations}]}; update values are string, string[], or null. Episode headings: Problem, Constraints, Alternatives considered, Reasoning and decision, Changes of understanding, Outcome, Unresolved questions. Runner supplies dates/provenance; do not emit runner fields. Unique localKey per create; no extra fields. No-op example: {digest:{projects:[],tags:[],sections:{...}},operations:[]}.`,
     "Create episodes only for substantive problem-solving or decisions; routine exchanges do not create episodes. Still record supported requests and commitments, including from routine exchanges, and update them when supported. A request remains kind=request until explicit acceptance. Rejected approaches and changes of mind are first-class; label abandoned branches abandoned exploration, not adopted decisions. Preserve uncertainty; use stated for George's claims, observed for evidence, and inferred only tentatively; never infer mental causes or diagnose. A commitment creation description's label and citations must conservatively support every initialized field because initialization has one shared provenance item. New record citations must cite only NEW span entries, not prior context or existing records.",
     `Existing records (derived context, not new evidence): ${JSON.stringify(records)}`,
-    `Allowed source IDs (format session-id/entry-id): ${sessionPairs.join(", ")}. Copy each cited source ID exactly as written, byte-for-byte, including the "/" separator; never shorten, reconstruct, or combine ID components. Each item must cite only IDs that support that item. The stated label applies only to George's own statements, not assistant choices or proposals.`,
+    `Allowed citation IDs (bare entry IDs): ${[...new Set(span.entries.map((entry) => entry.id))].join(", ")}. Cite the bare 8-character entry ID shown in each transcript entry's source field. Do not include a session ID or separator. Each item must cite only IDs that support that item. The stated label applies only to George's own statements, not assistant choices or proposals.`,
     "Return the complete replacement digest. For episodes, replace only current sections Problem, Constraints, Reasoning and decision, Outcome, and Unresolved questions; append cited dated items to Alternatives considered and Changes of understanding. Respect supplied currentText, including human edits. Do not emit empty/repeated headings or no-op operations. Existing digest/context are not fresh evidence; context-only entries cannot support claims.",
     "Existing digest (may be corrected; its cited source references remain eligible):", priorBody || "(none)",
     "Prior context (interpretation only):", ...context.map((entry) => contextEntry(entry, true)), "New entries:", ...span.entries.map((entry) => contextEntry(entry)),
@@ -83,6 +82,19 @@ function parseOutput(raw: string, span: PlannedSpan, prior: DigestFrontmatter | 
   if (!value || !Array.isArray(value.projects) || !Array.isArray(value.tags) || !value.sections || typeof value.sections !== "object") throw new Error("Model returned invalid digest JSON");
   const priorSources = prior?.sources.flatMap((source) => source.entryIds.map((entryId) => `${source.sessionId}/${entryId}`)) ?? [];
   const allowed = new Set([...priorSources, ...span.entries.map((entry) => `${entry.sessionId}/${entry.id}`)]);
+  const byEntryId = new Map<string, TranscriptEntry[]>();
+  for (const entry of span.entries) byEntryId.set(entry.id, [...(byEntryId.get(entry.id) ?? []), entry]);
+  const resolveCitation = (citation: unknown, location: string): string => {
+    if (typeof citation !== "string") throw new Error(`${location}: unknown citation ${JSON.stringify(citation)}`);
+    if (citation.includes("/")) {
+      if (allowed.has(citation)) return citation;
+      throw new Error(`${location}: unknown citation ${JSON.stringify(citation)}`);
+    }
+    const matches = byEntryId.get(citation) ?? [];
+    if (matches.length > 1) throw new Error(`${location}: ambiguous bare citation ${JSON.stringify(citation)} matches multiple eligible entries`);
+    if (matches.length === 1) return `${matches[0]!.sessionId}/${matches[0]!.id}`;
+    throw new Error(`${location}: unknown citation ${JSON.stringify(citation)}`);
+  };
   const sections: Record<string, DigestItem[]> = {};
   for (const heading of headings) {
     const items = value.sections[heading];
@@ -93,13 +105,19 @@ function parseOutput(raw: string, span: PlannedSpan, prior: DigestFrontmatter | 
       if (!["stated", "observed", "inferred"].includes(item.label)) throw new Error(`${location}: invalid label ${JSON.stringify(item.label)}`);
       if (typeof item.text !== "string") throw new Error(`${location}: invalid text field`);
       if (!Array.isArray(item.citations) || item.citations.length === 0) throw new Error(`${location}: invalid citations field`);
-      for (const citation of item.citations) if (typeof citation !== "string" || !allowed.has(citation)) throw new Error(`${location}: unknown citation ${JSON.stringify(citation)}`);
-      return { label: item.label, text: item.text, citations: item.citations };
+      const citations = item.citations.map((citation: unknown) => resolveCitation(citation, location));
+      return { label: item.label, text: item.text, citations };
     });
   }
   if (Object.keys(value.sections).some((heading) => !(headings as readonly string[]).includes(heading))) throw new Error("Model returned an unknown section");
   if (value.projects.some((project) => typeof project !== "string") || value.tags.some((tag) => typeof tag !== "string")) throw new Error("Model returned invalid projects or tags");
-  return { digest: { projects: value.projects as string[], tags: value.tags as string[], sections }, operations: envelope.operations };
+  const normalizeOperationCitations = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(normalizeOperationCitations);
+    if (!value || typeof value !== "object") return value;
+    const item = value as Record<string, unknown>;
+    return Object.fromEntries(Object.entries(item).map(([key, child]) => [key, key === "citations" && Array.isArray(child) ? child.map((citation) => resolveCitation(citation, "Model returned invalid operation citation")) : normalizeOperationCitations(child)]));
+  };
+  return { digest: { projects: value.projects as string[], tags: value.tags as string[], sections }, operations: normalizeOperationCitations(envelope.operations) };
 }
 function prepareOperations(raw: unknown, span: PlannedSpan, index: RecordIndex): RecordOperation[] {
   if (!Array.isArray(raw)) throw new Error("Model returned invalid operations");
@@ -276,7 +294,7 @@ export async function consolidate(options: ConsolidateOptions = {}): Promise<{ p
       const prior = priors.get(span.date);
       const activityDays = [...new Set(readdirSync(join(dir, "digests"), { withFileTypes: true }).filter((entry) => entry.isFile() && /^\d{4}-\d{2}-\d{2}\.md$/.test(entry.name)).map((entry) => entry.name.slice(0, 10)))].filter((date) => date <= span.date).sort().slice(-2);
       const recordIndex = loadRecordIndex(dir); const recordContext = buildRecordContext(recordIndex, span.date, activityDays);
-      const prompt = buildPrompt(span, span.context, prior?.body ?? "", prior?.frontmatter.sources.flatMap((source) => source.entryIds.map((entryId) => `${source.sessionId}/${entryId}`)) ?? [], recordContext);
+      const prompt = buildPrompt(span, span.context, prior?.body ?? "", recordContext);
       let lastValidationError: Error | undefined;
       let accepted: { digest: DigestOutput; files: Array<{ path: string; content: string; preHash: string | null }> } | undefined;
       let validationAttempt = false, providerRetry = false;
