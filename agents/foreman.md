@@ -1,6 +1,7 @@
 ---
 name: foreman
-description: Delegation lead. Breaks a larger task into bite-sized briefs, dispatches them to worker (with scout/reviewer as needed), checks each piece against its brief, and returns an integrated result.
+description: Delegation lead for larger multi-piece implementation work; breaks an approved task into bite-sized briefs, dispatches implementation and review, and integrates results.
+advertise: true
 thinking: high
 systemPromptMode: replace
 inheritProjectContext: true
