@@ -35,6 +35,12 @@ test("relative memory roots resolve absolutely before file routing", () => {
   assert.equal(resolveMemoryDir("episodes"), resolve("episodes"));
 });
 
+test("successful consolidation reports the number of processed transcript entries", async () => fixture(async (_root, sessions, memory) => {
+  writeSession(sessions, [row("u1", null, "user", "first"), row("a1", "u1", "assistant", "done", undefined, "stop")]);
+  const result = await consolidate({ sessionsDir: sessions, memoryDir: memory, model: validModel() });
+  assert.equal(result.processedEntries, 2);
+}));
+
 test("prompt requires source IDs to be copied verbatim with their separator", async () => fixture(async (_root, sessions, memory) => {
   const sessionId = "01a144e8-9cd4-767e-afb1-4ef6ae5e486d";
   const entryId = "a5f3fa23";

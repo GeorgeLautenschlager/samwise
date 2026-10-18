@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { resolveDefaultSessionsDir } from "./sessions.ts";
 
 export interface TranscriptEntry {
   id: string;
@@ -41,8 +42,9 @@ function walk(directory: string, result: string[]): void {
   }
 }
 
-export function discoverSessionFiles(directory = join(process.env.HOME ?? "", ".pi", "agent", "sessions")): string[] {
+export function discoverSessionFiles(directory = resolveDefaultSessionsDir()): string[] {
   const root = resolve(directory);
+  if (!existsSync(root)) return [];
   const result: string[] = [];
   walk(root, result);
   return result.sort();

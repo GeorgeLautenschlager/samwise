@@ -30,7 +30,7 @@ try {
   else {
     const result = await consolidate({ ...args, model: args.dryRun ? undefined : await createPiModelAdapter() });
     if (args.dryRun) console.log(result.plan.length ? result.plan.join("\n") : "No new entries to process.");
-    else console.log(JSON.stringify(result.status, null, 2));
+    else console.log(JSON.stringify({ processedEntries: result.processedEntries, ...result.status }, null, 2));
   }
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error));

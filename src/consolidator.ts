@@ -67,7 +67,7 @@ export function buildPrompt(span: PlannedSpan, context: TranscriptEntry[], prior
   return [
     `Processing span local date: ${span.date}. Resolve relative due dates against the supplied local span day of the cited entry, not the current wall-clock date. Include due only as YYYY-MM-DD when unambiguous; omit it when ambiguous.`,
     `Return one strict JSON object: {digest:{projects:string[],tags:string[],sections:{<exact heading>:DigestItem[]}},operations:[...]}. No extra envelope keys. Digest headings are exactly ${headings.join(", ")}; every heading maps to a DigestItem array. DigestItem is {label:'stated'|'observed'|'inferred',text:string,citations:string[]}.`,
-    `Operations: create-episode {kind:'create-episode',localKey,fields:{title,status:'open'|'resolved'|'abandoned',projects,tags},sections:Record<episode heading,DigestItem[]>}; update-episode {kind:'update-episode',id,fields?:{title,status,projects,tags},sections?:Record<episode heading,DigestItem[]>}; create-commitment {kind:'create-commitment',localKey,fields:{title,kind:'request'|'commitment',owner,requested_by,due?,status:'open'|'in-progress'|'blocked'|'deferred'|'done'|'cancelled',blocked_on?,depends_on?,next_action,projects},description:DigestItem}; owner is who must act (George, Samwise, or a named person/agent); requested_by is the request originator. update-commitment {kind:'update-commitment',id,changes:[{field,value,label,citations}]}; update values are string, string[], or null. Episode headings: Problem, Constraints, Alternatives considered, Reasoning and decision, Changes of understanding, Outcome, Unresolved questions. Runner supplies dates/provenance; do not emit runner fields. Unique localKey per create; no extra fields. No-op example: {digest:{projects:[],tags:[],sections:{...}},operations:[]}.`,
+    `Operations: create-episode {kind:'create-episode',localKey,fields:{title,status:'open'|'resolved'|'abandoned',projects,tags},sections:Record<episode heading,DigestItem[]>}; update-episode {kind:'update-episode',id,fields?:{title,status,projects,tags},sections?:Record<episode heading,DigestItem[]>}; create-commitment {kind:'create-commitment',localKey,fields:{title,kind:'request'|'commitment',owner,requested_by,due?,status:'open'|'in-progress'|'blocked'|'deferred'|'done'|'cancelled',blocked_on?,depends_on?,next_action,projects},description:DigestItem}; owner is the actor who must act. George asking you/Samwise to do something means owner='Samwise', requested_by='George'. Your agreement to do it means kind='commitment', not kind='request'. George asking you to consider something without your agreement is kind='request'. requested_by is the request originator. update-commitment {kind:'update-commitment',id,changes:[{field,value,label,citations}]}; update values are string, string[], or null. Episode headings: Problem, Constraints, Alternatives considered, Reasoning and decision, Changes of understanding, Outcome, Unresolved questions. Runner supplies dates/provenance; do not emit runner fields. Unique localKey per create; no extra fields. No-op example: {digest:{projects:[],tags:[],sections:{...}},operations:[]}.`,
     "Create episodes only for substantive problem-solving or decisions; routine exchanges do not create episodes. Still record supported requests and commitments, including from routine exchanges, and update them when supported. A request remains kind=request until explicit acceptance. Rejected approaches and changes of mind are first-class; label abandoned branches abandoned exploration, not adopted decisions. Preserve uncertainty; use stated for George's claims, observed for evidence, and inferred only tentatively; never infer mental causes or diagnose. A commitment creation description's label and citations must conservatively support every initialized field because initialization has one shared provenance item. New record citations must cite only NEW span entries, not prior context or existing records.",
     `Existing records (derived context, not new evidence): ${JSON.stringify(records)}`,
     `Allowed source IDs (format session-id/entry-id): ${sessionPairs.join(", ")}. Copy each cited source ID exactly as written, byte-for-byte, including the "/" separator; never shorten, reconstruct, or combine ID components. Each item must cite only IDs that support that item. The stated label applies only to George's own statements, not assistant choices or proposals.`,
@@ -238,14 +238,14 @@ export function getConsolidationStatus(options: Pick<ConsolidateOptions, "sessio
 }
 export function planSummary(plan: SpanPlan): string[] { return plan.spans.map((span) => `${span.date}: ${[...new Set(span.entries.map((entry) => entry.sessionId))].join(", ")} — ${span.entries[0]?.id}..${span.entries.at(-1)?.id} (${span.entries.length} entries)`); }
 
-export async function consolidate(options: ConsolidateOptions = {}): Promise<{ plan: string[]; status: ConsolidationStatus }> {
+export async function consolidate(options: ConsolidateOptions = {}): Promise<{ plan: string[]; status: ConsolidationStatus; processedEntries: number }> {
   const dir = resolveMemoryDir(options.memoryDir);
   const snapshot = readTranscriptSnapshot(options.sessionsDir);
   const limit = options.maxEntries ?? 80;
   const lastSuccessfulRun = readLastSuccessfulRun(dir);
   if (options.dryRun) {
     const plan = planTranscriptSpans(snapshot, coverageFrom(dir, snapshot), limit);
-    return { plan: planSummary(plan), status: statusFrom(plan, lastSuccessfulRun) };
+    return { plan: planSummary(plan), status: statusFrom(plan, lastSuccessfulRun), processedEntries: 0 };
   }
   mkdirSync(dir, { recursive: true });
   const unlock = acquireLock(dir);
@@ -313,7 +313,7 @@ export async function consolidate(options: ConsolidateOptions = {}): Promise<{ p
     }
     const remainingCount = plan.processableCount - processedCount;
     const status: ConsolidationStatus = { ...statusFrom({ ...plan, processableCount: remainingCount, limitDeferredCount: Math.max(0, remainingCount - limit) }, readLastSuccessfulRun(dir), dir) };
-    return { plan: summary, status };
+    return { plan: summary, status, processedEntries: processedCount };
   } finally {
     process.removeListener("SIGINT", handleSignal);
     process.removeListener("SIGTERM", handleSignal);
