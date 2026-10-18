@@ -152,10 +152,11 @@ test("context prompt caps prior entries as valid JSON but preserves full new ent
   const span = planTranscriptSpans(readTranscriptSnapshot(directory)).spans[0];
   const prompt = buildPrompt(span, [span.entries[0]!]), instructions = prompt.split("Existing digest")[0]!;
   for (const heading of ["Work undertaken", "Outcomes", "Significant decisions", "Changes of plan and interruptions", "Carry-forward items"]) assert.equal(instructions.split(heading).length - 1, 1, `${heading} appears once`);
-  const prior = prompt.split("Prior context (interpretation only):\n")[1]!.split("\nNew entries:")[0]!;
+  const prior = prompt.split("Prior context (interpretation only; these entries have no source id and cannot be cited):\n")[1]!.split("\nNew entries:")[0]!;
   const next = prompt.split("\nNew entries:\n")[1]!;
   assert.ok(prior.length <= 2_000);
   assert.doesNotThrow(() => JSON.parse(prior));
+  assert.equal(JSON.parse(prior).source, undefined, "prior context is not citable");
   assert.ok(next.includes("x".repeat(4_900)));
 }));
 

@@ -50,7 +50,8 @@ function coverageFrom(dir: string, snapshot: ReturnType<typeof readTranscriptSna
 }
 
 function contextEntry(entry: TranscriptEntry, bounded = false): string {
-  const value = { source: entry.id, timestamp: entry.timestamp, role: entry.role, text: entry.text, toolCalls: [...entry.toolCalls], toolResults: [...entry.toolResults], branch: entry.abandoned ? "abandoned exploration (not adopted unless explicitly stated)" : "active" };
+  // Prior-context entries carry no id: they are interpretation only and must not be cited.
+  const value = { ...(bounded ? {} : { source: entry.id }), timestamp: entry.timestamp, role: entry.role, text: entry.text, toolCalls: [...entry.toolCalls], toolResults: [...entry.toolResults], branch: entry.abandoned ? "abandoned exploration (not adopted unless explicitly stated)" : "active" };
   if (!bounded) return JSON.stringify(value);
   let rendered = JSON.stringify(value);
   if (rendered.length > 2_000) {
@@ -72,7 +73,7 @@ export function buildPrompt(span: PlannedSpan, context: TranscriptEntry[], prior
     `Allowed citation IDs (bare entry IDs): ${[...new Set(span.entries.map((entry) => entry.id))].join(", ")}. Cite the bare 8-character entry ID shown in each transcript entry's source field. Do not include a session ID or separator. Each item must cite only IDs that support that item. The stated label applies only to George's own statements, not assistant choices or proposals.`,
     "Return the complete replacement digest. For episodes, replace only current sections Problem, Constraints, Reasoning and decision, Outcome, and Unresolved questions; append cited dated items to Alternatives considered and Changes of understanding. Respect supplied currentText, including human edits. Do not emit empty/repeated headings or no-op operations. Existing digest/context are not fresh evidence; context-only entries cannot support claims.",
     "Existing digest (may be corrected; its cited source references remain eligible):", priorBody || "(none)",
-    "Prior context (interpretation only):", ...context.map((entry) => contextEntry(entry, true)), "New entries:", ...span.entries.map((entry) => contextEntry(entry)),
+    "Prior context (interpretation only; these entries have no source id and cannot be cited):", ...context.map((entry) => contextEntry(entry, true)), "New entries:", ...span.entries.map((entry) => contextEntry(entry)),
   ].join("\n");
 }
 function parseOutput(raw: string, span: PlannedSpan, prior: DigestFrontmatter | undefined): { digest: DigestOutput; operations: unknown } {
