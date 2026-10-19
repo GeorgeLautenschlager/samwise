@@ -39,6 +39,31 @@ test("successful consolidation reports the number of processed transcript entrie
   writeSession(sessions, [row("u1", null, "user", "first"), row("a1", "u1", "assistant", "done", undefined, "stop")]);
   const result = await consolidate({ sessionsDir: sessions, memoryDir: memory, model: validModel() });
   assert.equal(result.processedEntries, 2);
+  assert.deepEqual(result.operationCounts, { "create-episode": 0, "update-episode": 0, "create-commitment": 0, "update-commitment": 0 });
+  assert.deepEqual(result.validationCorrections, []);
+}));
+
+test("prompt requires episodes for supported problem-solving and includes a valid cited open episode example", async () => fixture(async (_root, sessions, memory) => {
+  writeSession(sessions, [row("b2c3d4e5", null, "user", "We need a quick solution: compare a complex approach with a simpler one under a time constraint."), row("c3d4e5f6", "b2c3d4e5", "assistant", "Selected the simpler approach to meet the time constraint.", undefined, "stop")]);
+  const result = await consolidate({ sessionsDir: sessions, memoryDir: memory, model: { async consolidate(prompt) {
+    assert.match(prompt, /For each problem-solving sequence or decision, check for alternatives, constraints, reasoning, a changed understanding, or an outcome: if any are present, create or update an episode/);
+    assert.match(prompt, /Purely routine\/administrative spans may produce no episodes/);
+    assert.match(prompt, /status open and need not fill every section/);
+    assert.match(prompt, /No-op example:/);
+    assert.match(prompt, /Allowed citation IDs \(bare entry IDs\): b2c3d4e5, c3d4e5f6/);
+    const example = prompt.split("\n").find((line) => line.startsWith("Minimal create-episode operation example"))!;
+    const operation = JSON.parse(example.slice(example.indexOf('{')));
+    operation.sections["Reasoning and decision"][0].citations = ["c3d4e5f6"];
+    const digest = { projects: [], tags: [], sections: Object.fromEntries(["Work undertaken", "Outcomes", "Significant decisions", "Changes of plan and interruptions", "Carry-forward items"].map((heading) => [heading, []])) };
+    return JSON.stringify({ digest, operations: [operation] });
+  } } });
+  assert.equal(result.operationCounts["create-episode"], 1);
+  assert.deepEqual(result.validationCorrections, []);
+  const episodePath = join(memory, "episodes", readdirSync(join(memory, "episodes"))[0]!);
+  assert.equal(metadata(episodePath).status, "open");
+  assert.match(readFileSync(episodePath, "utf8"), /Selected the simpler approach to meet the time constraint\. — \[s-1\/c3d4e5f6\]/);
+  assert.deepEqual(metadata(join(memory, "digests", "2026-10-16.md")).sources, [{ sessionId: "s-1", entryIds: ["b2c3d4e5", "c3d4e5f6"] }]);
+  assert.equal(JSON.parse(readFileSync(join(memory, "state.json"), "utf8")).processedIdentities.length, 2);
 }));
 
 test("prompt asks for bare entry IDs and stores bare-id citations in the existing full format", async () => fixture(async (_root, sessions, memory) => {
@@ -100,7 +125,8 @@ test("one bounded multi-day run exposes created records to later spans and updat
     const records = JSON.parse(recordLine.slice(recordLine.indexOf(": ") + 2)); assert.match(records.episodes[0].summary, /Option B rejected/); ids.push(records.episodes[0].id);
     return JSON.stringify({ digest, operations: [{ kind: "update-episode", id: ids[0], fields: { status: "resolved" }, sections: { "Changes of understanding": [{ label: "stated", text: "Plan revised", citations: [citation] }] } }] });
   } };
-  await consolidate({ sessionsDir: sessions, memoryDir: memory, model });
+  const result = await consolidate({ sessionsDir: sessions, memoryDir: memory, model });
+  assert.deepEqual(result.operationCounts, { "create-episode": 1, "update-episode": 1, "create-commitment": 0, "update-commitment": 0 });
   assert.equal(calls, 2); assert.equal(ids.length, 1);
   const files = readdirSync(join(memory, "episodes")); assert.equal(files.length, 1);
   const record = readFileSync(join(memory, "episodes", files[0]), "utf8");
@@ -271,6 +297,8 @@ test("dry-run does not create store, invoke model, or write a lock", async () =>
   const result = await consolidate({ sessionsDir: sessions, memoryDir: memory, dryRun: true, model: validModel(() => calls++) });
   assert.match(result.plan.join("\n"), /2026-10-16: s-1 — u1\.\.a1/);
   assert.equal(calls, 0);
+  assert.deepEqual(result.operationCounts, { "create-episode": 0, "update-episode": 0, "create-commitment": 0, "update-commitment": 0 });
+  assert.deepEqual(result.validationCorrections, []);
   assert.equal(existsSync(memory), false);
   getConsolidationStatus({ sessionsDir: sessions, memoryDir: memory });
   assert.equal(existsSync(memory), false);

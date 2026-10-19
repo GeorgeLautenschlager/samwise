@@ -36,13 +36,34 @@ test("provides source timestamps and accepts due dates relative to the span date
 test("retries a validation error once with the validation error only", () => fixture(async (sessions, memory) => {
   const prompts: string[] = [];
   const model: ModelAdapter = { async consolidate(prompt) { prompts.push(prompt); return prompts.length === 1 ? output("session/id") : output("s-1/u1"); } };
-  await consolidate({ sessionsDir: sessions, memoryDir: memory, model });
+  const result = await consolidate({ sessionsDir: sessions, memoryDir: memory, model });
+  assert.deepEqual(result.validationCorrections, [{ date: "2026-10-16", error: "Model returned invalid item/citation in Work undertaken item 1: [redacted]" }]);
+  assert.doesNotMatch(JSON.stringify(result), /session\/id/);
   assert.equal(prompts.length, 2);
   assert.match(prompts[1], /invalid item\/citation in Work undertaken item 1: unknown citation "session\/id"/i);
   assert.match(prompts[1], /Validation error:/);
   assert.doesNotMatch(prompts[1], /Previous response/);
   assert.equal(readFileSync(join(memory, "digests", "2026-10-16.md"), "utf8").includes("session/id"), false);
   assert.equal(JSON.parse(readFileSync(join(memory, "state.json"), "utf8")).processedIdentities.length, 2);
+}));
+test("correction that drops a malformed episode reports the retry and zero episode creates", () => fixture(async (sessions, memory) => {
+  const prompts: string[] = [];
+  const commitment = { kind: "create-commitment", localKey: "record", fields: { title: "Record this", kind: "request", owner: "Samwise", requested_by: "George", status: "open", next_action: "Record this", projects: [] }, description: { label: "stated", text: "Record this", citations: ["s-1/u1"] } };
+  const malformedEpisode = { kind: "create-episode", localKey: "decision", fields: { title: "Approach", status: "open", projects: [], tags: [] }, sections: { Outcome: "not an array" } };
+  const model: ModelAdapter = { async consolidate(prompt) {
+    prompts.push(prompt);
+    return JSON.stringify({ digest: JSON.parse(output("s-1/u1")).digest, operations: prompts.length === 1 ? [malformedEpisode, commitment] : [commitment] });
+  } };
+  const result = await consolidate({ sessionsDir: sessions, memoryDir: memory, model });
+  assert.equal(prompts.length, 2);
+  assert.match(prompts[1], /Validation error: Invalid episode sections: Outcome must be an array/);
+  assert.deepEqual(result.validationCorrections, [{ date: "2026-10-16", error: "Invalid episode sections: [redacted]" }]);
+  assert.deepEqual(result.operationCounts, { "create-episode": 0, "update-episode": 0, "create-commitment": 1, "update-commitment": 0 });
+  assert.equal(result.processedEntries, 2);
+  assert.equal(existsSync(join(memory, "episodes")), false);
+  assert.equal(readdirSync(join(memory, "commitments")).length, 1);
+  assert.equal(JSON.parse(readFileSync(join(memory, "state.json"), "utf8")).processedIdentities.length, 2);
+  assert.doesNotMatch(JSON.stringify(result), /not an array|Record this|Approach/);
 }));
 test("two invalid outputs fail without writing outputs, journal, or state", () => fixture(async (sessions, memory) => {
   let calls = 0;
@@ -138,8 +159,10 @@ test("provider and validation retries are independently bounded in validation-th
 test("malformed JSON gets one validation retry", () => fixture(async (sessions, memory) => {
   let calls = 0;
   const model: ModelAdapter = { async consolidate() { return ++calls === 1 ? "not json" : output("s-1/u1"); } };
-  await consolidate({ sessionsDir: sessions, memoryDir: memory, model });
+  const result = await consolidate({ sessionsDir: sessions, memoryDir: memory, model });
   assert.equal(calls, 2);
+  assert.deepEqual(result.validationCorrections, [{ date: "2026-10-16", error: "SyntaxError" }]);
+  assert.doesNotMatch(JSON.stringify(result), /not json/);
 }));
 test("failed multi-operation candidate does not leak virtual records into retry context", () => fixture(async (sessions, memory) => {
   const prompts: string[] = [];

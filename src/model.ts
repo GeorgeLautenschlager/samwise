@@ -10,8 +10,8 @@ export async function createPiModelAdapter(): Promise<ModelAdapter> {
     authPath: join(agentDir, "auth.json"),
     modelsPath: join(agentDir, "models.json"),
   });
-  const model = runtime.getModel("openai", "gpt-6-luna");
-  if (!model) throw new Error("Configured model openai/gpt-6-luna is not in the local Pi model catalog");
+  const model = runtime.getModel("openai", "gpt-6.1-sol");
+  if (!model) throw new Error("Configured model openai/gpt-6.1-sol is not in the local Pi model catalog");
   return {
     async consolidate(prompt: string): Promise<string> {
       const response = await runtime.completeSimple(model, {

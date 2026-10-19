@@ -74,7 +74,7 @@ test("routine request progresses through acceptance, blocked, and done across fo
       const desired = states[day - 15];
       const model: ModelAdapter = { async consolidate(prompt) {
         calls++;
-        assert.match(prompt, /routine exchanges do not create episodes/i);
+        assert.match(prompt, /Purely routine\/administrative spans may produce no episodes/i);
         if (day === 15) {
           assert.match(prompt, /Still record supported requests and commitments/i);
           return JSON.stringify({ digest: emptyDigest(), operations: [{ kind: "create-commitment", localKey: "routine", fields: { title: "Review request", kind: "request", owner: "George", requested_by: "Samwise", status: "open", next_action: "Decide whether to accept", projects: [] }, description: { label: "stated", text: "Please review this request", citations: [allowedId(prompt)] } }] });
@@ -86,7 +86,9 @@ test("routine request progresses through acceptance, blocked, and done across fo
         if (day === 17) changes.push({ field: "blocked_on", value: "approval", label: "observed", citations: [allowedId(prompt)] });
         return JSON.stringify({ digest: emptyDigest(), operations: [{ kind: "update-commitment", id, changes }] });
       } };
-      await consolidate({ sessionsDir: sessions, memoryDir: memory, model });
+      const result = await consolidate({ sessionsDir: sessions, memoryDir: memory, model });
+      assert.deepEqual(result.operationCounts, { "create-episode": 0, "update-episode": 0, "create-commitment": day === 15 ? 1 : 0, "update-commitment": day === 15 ? 0 : 1 });
+      assert.deepEqual(result.validationCorrections, []);
       const paths = recordFiles(memory, "commitments"); assert.equal(paths.length, 1); coPath = paths[0];
       const co = metadata(coPath);
       if (day === 15) { id = co.id; assert.equal(co.kind, "request"); manualEdit(coPath); }

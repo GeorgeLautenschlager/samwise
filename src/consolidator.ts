@@ -9,6 +9,7 @@ import { localDate, planTranscriptSpans, readTranscriptSnapshot, type PlannedSpa
 export type { DigestItem } from "./records.ts";
 export interface DigestOutput { projects: string[]; tags: string[]; sections: Record<string, DigestItem[]> }
 export interface ModelAdapter { consolidate(prompt: string): Promise<string> }
+export interface ConsolidationResult { plan: string[]; status: ConsolidationStatus; processedEntries: number; operationCounts: Record<RecordOperation["kind"], number>; validationCorrections: Array<{ date: string; error: string }> }
 export interface ConsolidateOptions { sessionsDir?: string; memoryDir?: string; maxEntries?: number; dryRun?: boolean; model?: ModelAdapter; afterDigestWrite?: (date: string) => void; afterOutputWrite?: (kind: string, index: number) => void; afterPrepare?: () => void }
 interface DigestFrontmatter { type: "digest"; date: string; derived: true; projects: string[]; tags: string[]; sources: Array<{ sessionId: string; entryIds: string[] }> }
 interface ConsolidationState { version: 1 | 2; processedIdentities: string[]; lastSuccessfulRun: string | null }
@@ -68,7 +69,8 @@ export function buildPrompt(span: PlannedSpan, context: TranscriptEntry[], prior
     `Processing span local date: ${span.date}. Resolve relative due dates against the supplied local span day of the cited entry, not the current wall-clock date. Include due only as YYYY-MM-DD when unambiguous; omit it when ambiguous.`,
     `Return one strict JSON object: {digest:{projects:string[],tags:string[],sections:{<exact heading>:DigestItem[]}},operations:[...]}. No extra envelope keys. Digest headings are exactly ${headings.join(", ")}; every heading maps to a DigestItem array. DigestItem is {label:'stated'|'observed'|'inferred',text:string,citations:string[]}.`,
     `Operations: create-episode {kind:'create-episode',localKey,fields:{title,status:'open'|'resolved'|'abandoned',projects,tags},sections:Record<episode heading,DigestItem[]>}; update-episode {kind:'update-episode',id,fields?:{title,status,projects,tags},sections?:Record<episode heading,DigestItem[]>}; create-commitment {kind:'create-commitment',localKey,fields:{title,kind:'request'|'commitment',owner,requested_by,due?,status:'open'|'in-progress'|'blocked'|'deferred'|'done'|'cancelled',blocked_on?,depends_on?,next_action,projects},description:DigestItem}; owner is the actor who must act. George asking you/Samwise to do something means owner='Samwise', requested_by='George'. Your agreement to do it means kind='commitment', not kind='request'. George asking you to consider something without your agreement is kind='request'. requested_by is the request originator. update-commitment {kind:'update-commitment',id,changes:[{field,value,label,citations}]}; update values are string, string[], or null. Episode headings: Problem, Constraints, Alternatives considered, Reasoning and decision, Changes of understanding, Outcome, Unresolved questions. Runner supplies dates/provenance; do not emit runner fields. Unique localKey per create; no extra fields. No-op example: {digest:{projects:[],tags:[],sections:{...}},operations:[]}.`,
-    "Create episodes only for substantive problem-solving or decisions; routine exchanges do not create episodes. Still record supported requests and commitments, including from routine exchanges, and update them when supported. A request remains kind=request until explicit acceptance. Rejected approaches and changes of mind are first-class; label abandoned branches abandoned exploration, not adopted decisions. Preserve uncertainty; use stated for George's claims, observed for evidence, and inferred only tentatively; never infer mental causes or diagnose. A commitment creation description's label and citations must conservatively support every initialized field because initialization has one shared provenance item. New record citations must cite only NEW span entries, not prior context or existing records.",
+    "For each problem-solving sequence or decision, check for alternatives, constraints, reasoning, a changed understanding, or an outcome: if any are present, create or update an episode. Purely routine/administrative spans may produce no episodes. An episode may have status open and need not fill every section; include only supported cited items. Still record supported requests and commitments, including from routine exchanges, and update them when supported. A request remains kind=request until explicit acceptance. Rejected approaches and changes of mind are first-class; label abandoned branches abandoned exploration, not adopted decisions. Preserve uncertainty; use stated for George's claims, observed for evidence, and inferred only tentatively; never infer mental causes or diagnose. A commitment creation description's label and citations must conservatively support every initialized field because initialization has one shared provenance item. New record citations must cite only NEW span entries, not prior context or existing records.",
+    'Minimal create-episode operation example (replace a1b2c3d with an allowed ID supporting the text): {"kind":"create-episode","localKey":"approach","fields":{"title":"Choose approach","status":"open","projects":[],"tags":[]},"sections":{"Reasoning and decision":[{"label":"observed","text":"Selected the simpler approach to meet the time constraint.","citations":["a1b2c3d"]}]}}',
     `Existing records (derived context, not new evidence): ${JSON.stringify(records)}`,
     `Allowed citation IDs (bare entry IDs): ${[...new Set(span.entries.map((entry) => entry.id))].join(", ")}. Cite the bare 8-character entry ID shown in each transcript entry's source field. Do not include a session ID or separator. Each item must cite only IDs that support that item. The stated label applies only to George's own statements, not assistant choices or proposals.`,
     "Return the complete replacement digest. For episodes, replace only current sections Problem, Constraints, Reasoning and decision, Outcome, and Unresolved questions; append cited dated items to Alternatives considered and Changes of understanding. Respect supplied currentText, including human edits. Do not emit empty/repeated headings or no-op operations. Existing digest/context are not fresh evidence; context-only entries cannot support claims.",
@@ -257,14 +259,22 @@ export function getConsolidationStatus(options: Pick<ConsolidateOptions, "sessio
 }
 export function planSummary(plan: SpanPlan): string[] { return plan.spans.map((span) => `${span.date}: ${[...new Set(span.entries.map((entry) => entry.sessionId))].join(", ")} — ${span.entries[0]?.id}..${span.entries.at(-1)?.id} (${span.entries.length} entries)`); }
 
-export async function consolidate(options: ConsolidateOptions = {}): Promise<{ plan: string[]; status: ConsolidationStatus; processedEntries: number }> {
+function reportedValidationError(error: Error): string {
+  // Diagnostics must not echo model-authored values or JSON parser excerpts.
+  if (error instanceof SyntaxError || error instanceof TypeError) return error.name;
+  return error.message.replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g, "[redacted]").replace(/:[\s\S]*$/, ": [redacted]").replace(/(Cannot update invalid record )[\s\S]*$/, "$1[redacted]");
+}
+
+export async function consolidate(options: ConsolidateOptions = {}): Promise<ConsolidationResult> {
+  const operationCounts: ConsolidationResult["operationCounts"] = { "create-episode": 0, "update-episode": 0, "create-commitment": 0, "update-commitment": 0 };
+  const validationCorrections: ConsolidationResult["validationCorrections"] = [];
   const dir = resolveMemoryDir(options.memoryDir);
   const snapshot = readTranscriptSnapshot(options.sessionsDir);
   const limit = options.maxEntries ?? 80;
   const lastSuccessfulRun = readLastSuccessfulRun(dir);
   if (options.dryRun) {
     const plan = planTranscriptSpans(snapshot, coverageFrom(dir, snapshot), limit);
-    return { plan: planSummary(plan), status: statusFrom(plan, lastSuccessfulRun), processedEntries: 0 };
+    return { plan: planSummary(plan), status: statusFrom(plan, lastSuccessfulRun), processedEntries: 0, operationCounts, validationCorrections };
   }
   mkdirSync(dir, { recursive: true });
   const unlock = acquireLock(dir);
@@ -297,7 +307,7 @@ export async function consolidate(options: ConsolidateOptions = {}): Promise<{ p
       const recordIndex = loadRecordIndex(dir); const recordContext = buildRecordContext(recordIndex, span.date, activityDays);
       const prompt = buildPrompt(span, span.context, prior?.body ?? "", recordContext);
       let lastValidationError: Error | undefined;
-      let accepted: { digest: DigestOutput; files: Array<{ path: string; content: string; preHash: string | null }> } | undefined;
+      let accepted: { digest: DigestOutput; operations: RecordOperation[]; files: Array<{ path: string; content: string; preHash: string | null }> } | undefined;
       let validationAttempt = false, providerRetry = false;
       while (!accepted) {
         const attemptPrompt = validationAttempt ? `${prompt}\n\nValidation correction: return the complete corrected strict JSON envelope. Validation error: ${lastValidationError!.message}` : prompt;
@@ -320,19 +330,21 @@ export async function consolidate(options: ConsolidateOptions = {}): Promise<{ p
               advanceOperation(candidateIndex, operation, rendered);
             }
           }
-          accepted = { digest: envelope.digest, files: [...renderedFiles.values()] };
+          accepted = { digest: envelope.digest, operations: spanOperations, files: [...renderedFiles.values()] };
           break;
         } catch (error) {
           if (validationAttempt) throw error;
           lastValidationError = error as Error; validationAttempt = true;
+          validationCorrections.push({ date: span.date, error: reportedValidationError(lastValidationError) });
         }
       }
       const committedSpan = { date: span.date, output: accepted.digest, entries: span.entries, files: accepted.files, ...(prior ? { prior } : {}) };
       persistSpan(dir, committedSpan, currentCoverage, options); processedCount += span.entries.length;
+      for (const operation of accepted.operations) operationCounts[operation.kind]++;
     }
     const remainingCount = plan.processableCount - processedCount;
     const status: ConsolidationStatus = { ...statusFrom({ ...plan, processableCount: remainingCount, limitDeferredCount: Math.max(0, remainingCount - limit) }, readLastSuccessfulRun(dir), dir) };
-    return { plan: summary, status, processedEntries: processedCount };
+    return { plan: summary, status, processedEntries: processedCount, operationCounts, validationCorrections };
   } finally {
     process.removeListener("SIGINT", handleSignal);
     process.removeListener("SIGTERM", handleSignal);
