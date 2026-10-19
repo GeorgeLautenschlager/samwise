@@ -53,6 +53,7 @@ test("prompt requires episodes for supported problem-solving and includes a vali
     assert.match(prompt, /Allowed citation IDs \(bare entry IDs\): b2c3d4e5, c3d4e5f6/);
     const example = prompt.split("\n").find((line) => line.startsWith("Minimal create-episode operation example"))!;
     const operation = JSON.parse(example.slice(example.indexOf('{')));
+    assert.deepEqual(operation.sections["Reasoning and decision"][0].citations, ["a1b2c3d4"]);
     operation.sections["Reasoning and decision"][0].citations = ["c3d4e5f6"];
     const digest = { projects: [], tags: [], sections: Object.fromEntries(["Work undertaken", "Outcomes", "Significant decisions", "Changes of plan and interruptions", "Carry-forward items"].map((heading) => [heading, []])) };
     return JSON.stringify({ digest, operations: [operation] });
@@ -89,14 +90,14 @@ test("full session/entry citations remain accepted", async () => fixture(async (
 test("unknown citation IDs are rejected", async () => fixture(async (_root, sessions, memory) => {
   writeSession(sessions, [row("u1", null, "user", "first"), row("a1", "u1", "assistant", "done", undefined, "stop")]);
   const sections = Object.fromEntries(["Work undertaken", "Outcomes", "Significant decisions", "Changes of plan and interruptions", "Carry-forward items"].map((heading) => [heading, [{ label: "observed", text: "Recorded", citations: ["not-real"] }]]));
-  await assert.rejects(consolidate({ sessionsDir: sessions, memoryDir: memory, model: { async consolidate() { return JSON.stringify({ digest: { projects: [], tags: [], sections }, operations: [] }); } } }), /unknown citation "not-real"/);
+  await assert.rejects(consolidate({ sessionsDir: sessions, memoryDir: memory, model: { async consolidate() { return JSON.stringify({ digest: { projects: [], tags: [], sections }, operations: [] }); } } }), /^Error: Model returned invalid item\/citation in Work undertaken item 1: \[redacted\]$/);
 }));
 
 test("ambiguous bare citation IDs across sessions are rejected", async () => fixture(async (_root, sessions, memory) => {
   mkdirSync(sessions, { recursive: true });
   for (const sessionId of ["first", "second"]) writeFileSync(join(sessions, `${sessionId}.jsonl`), `${JSON.stringify({ type: "session", id: sessionId })}\n${JSON.stringify(row("u1", null, "user", `first ${sessionId}`))}\n${JSON.stringify(row(`${sessionId}-a`, "u1", "assistant", `done ${sessionId}`, undefined, "stop"))}\n`);
   const sections = Object.fromEntries(["Work undertaken", "Outcomes", "Significant decisions", "Changes of plan and interruptions", "Carry-forward items"].map((heading) => [heading, [{ label: "observed", text: "Recorded", citations: ["u1"] }]]));
-  await assert.rejects(consolidate({ sessionsDir: sessions, memoryDir: memory, model: { async consolidate() { return JSON.stringify({ digest: { projects: [], tags: [], sections }, operations: [] }); } } }), /ambiguous bare citation "u1" matches multiple eligible entries/);
+  await assert.rejects(consolidate({ sessionsDir: sessions, memoryDir: memory, model: { async consolidate() { return JSON.stringify({ digest: { projects: [], tags: [], sections }, operations: [] }); } } }), /^Error: Model returned invalid item\/citation in Work undertaken item 1: \[redacted\]$/);
 }));
 
 test("same-day limited runs revise one digest and extend plain sources", async () => fixture(async (_root, sessions, memory) => {
